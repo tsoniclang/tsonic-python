@@ -12,11 +12,18 @@ test("python target pack registers under the python target id", () => {
   assert.equal(pack.displayName, "Python");
 });
 
-test("python target pack declares no built-in surfaces or provider packages", () => {
+test("python target pack declares stdlib provider packages and no surfaces", () => {
   const pack = createPythonTargetPack();
 
   assert.deepEqual(pack.surfaces, []);
-  assert.deepEqual(pack.packages, []);
+  assert.deepEqual(pack.packages.map((candidate) => candidate.id), [
+    "python-math",
+    "python-pathlib",
+    "python-os",
+    "python-sys",
+    "python-datetime",
+    "python-asyncio",
+  ]);
 });
 
 test("python provider creates the target semantics extension and validates options", () => {

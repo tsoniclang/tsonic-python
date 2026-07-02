@@ -22,6 +22,7 @@ test("empty project emits a deterministic pyproject and package files", () => {
   assert.deepEqual(result.artifacts.map((artifact) => artifact.path), [
     "pyproject.toml",
     "src/tsonic_generated/__init__.py",
+    "src/tsonic_generated/py.typed",
   ]);
   assert.equal(artifactText(result, "pyproject.toml"), [
     "[build-system]",
@@ -64,6 +65,7 @@ test("empty source files lower to header-only python modules in sorted order", (
   assert.deepEqual(result.artifacts.map((artifact) => artifact.path), [
     "pyproject.toml",
     "src/tsonic_generated/__init__.py",
+    "src/tsonic_generated/py.typed",
     "src/tsonic_generated/alpha_beta.py",
     "src/tsonic_generated/zeta.py",
   ]);

@@ -1,0 +1,468 @@
+import type { TargetTypeRef } from "@tsonic/tsts";
+import { createPythonProviderPackage } from "./index.js";
+import type { PythonProviderPackageImplementation } from "./index.js";
+import {
+  pythonNoneTargetType,
+  pythonSourcePrimitiveTargetType,
+  pythonStrTargetType,
+} from "../python-target-types.js";
+
+// Product provider packages for the Python standard library. Closed
+// contracts only: every operation row lowers through an existing lane
+// (call/constructor/method/property/static-attribute/static-method/await).
+// Concrete Python module and attribute names live here and nowhere else in
+// the compiler.
+//
+// Declaration-shape note: `kind: "value"` exports render (`export declare
+// const pi: number;`) and prove in the semantics lane, but bare-identifier
+// reads are planned as plain names by the backend, which would emit an
+// unqualified `pi` with no import. Module attributes are therefore declared
+// as readonly properties on a namespace-shaped export (`math.pi`,
+// `os.sep`, `sys.platform`), which lowers through the proven
+// static-attribute property lane.
+
+const strCarrier = pythonStrTargetType();
+const floatCarrier = pythonSourcePrimitiveTargetType("float64");
+const intCarrier = pythonSourcePrimitiveTargetType("int64");
+const noneCarrier = pythonNoneTargetType();
+
+export const pythonPathlibPathTargetId = "python.pathlib.Path";
+export const pythonDatetimeTargetId = "python.datetime.datetime";
+
+const pathCarrier: TargetTypeRef = { kind: "target-named", id: pythonPathlibPathTargetId };
+const datetimeCarrier: TargetTypeRef = { kind: "target-named", id: pythonDatetimeTargetId };
+
+const stdlibVersion = "1.0.0";
+
+export function createPythonMathPackage(): PythonProviderPackageImplementation {
+  const mathCall = (name: string) =>
+    ({ form: "call", import: { style: "module", module: "math", name } }) as const;
+  const numberFunction = (name: string, parameters: readonly string[], returnsInt: boolean) => ({
+    id: `@python/math::${name}`,
+    name,
+    kind: "function" as const,
+    signatures: [{
+      id: `@python/math::${name}(${parameters.join(",")})`,
+      name,
+      parameters: parameters.map((parameter) => ({ name: parameter, type: { kind: "number" as const } })),
+      returnType: returnsInt
+        ? { kind: "source-primitive" as const, name: "int64" as const }
+        : { kind: "number" as const },
+    }],
+  });
+  return createPythonProviderPackage({
+    id: "python-math",
+    displayName: "Python stdlib: math",
+    version: stdlibVersion,
+    modules: [{
+      moduleSpecifier: "@python/math",
+      providerModuleId: "python.math",
+      exports: [
+        numberFunction("sqrt", ["x"], false),
+        numberFunction("floor", ["x"], true),
+        numberFunction("ceil", ["x"], true),
+        numberFunction("fabs", ["x"], false),
+        numberFunction("pow", ["x", "y"], false),
+        {
+          id: "@python/math::math",
+          name: "math",
+          kind: "namespace",
+          members: [
+            { id: "@python/math::math.pi", name: "pi", kind: "property", readonly: true, type: { kind: "number" } },
+            { id: "@python/math::math.e", name: "e", kind: "property", readonly: true, type: { kind: "number" } },
+          ],
+        },
+      ],
+    }],
+    operations: [
+      {
+        exportId: "@python/math::sqrt",
+        operationKind: "method",
+        target: mathCall("sqrt"),
+        resultCarrier: floatCarrier,
+        parameterCarriers: [floatCarrier],
+      },
+      {
+        exportId: "@python/math::floor",
+        operationKind: "method",
+        target: mathCall("floor"),
+        resultCarrier: intCarrier,
+        parameterCarriers: [floatCarrier],
+      },
+      {
+        exportId: "@python/math::ceil",
+        operationKind: "method",
+        target: mathCall("ceil"),
+        resultCarrier: intCarrier,
+        parameterCarriers: [floatCarrier],
+      },
+      {
+        exportId: "@python/math::fabs",
+        operationKind: "method",
+        target: mathCall("fabs"),
+        resultCarrier: floatCarrier,
+        parameterCarriers: [floatCarrier],
+      },
+      {
+        exportId: "@python/math::pow",
+        operationKind: "method",
+        target: mathCall("pow"),
+        resultCarrier: floatCarrier,
+        parameterCarriers: [floatCarrier, floatCarrier],
+      },
+      {
+        exportId: "@python/math::math",
+        memberId: "@python/math::math.pi",
+        operationKind: "property",
+        target: { form: "static-attribute", import: { style: "module", module: "math" }, name: "pi" },
+        resultCarrier: floatCarrier,
+      },
+      {
+        exportId: "@python/math::math",
+        memberId: "@python/math::math.e",
+        operationKind: "property",
+        target: { form: "static-attribute", import: { style: "module", module: "math" }, name: "e" },
+        resultCarrier: floatCarrier,
+      },
+    ],
+    dependencies: [],
+  });
+}
+
+export function createPythonPathlibPackage(): PythonProviderPackageImplementation {
+  const pathRef = { kind: "provider-ref" as const, moduleSpecifier: "@python/pathlib", exportName: "Path" };
+  return createPythonProviderPackage({
+    id: "python-pathlib",
+    displayName: "Python stdlib: pathlib",
+    version: stdlibVersion,
+    modules: [{
+      moduleSpecifier: "@python/pathlib",
+      providerModuleId: "python.pathlib",
+      exports: [{
+        id: "@python/pathlib::Path",
+        name: "Path",
+        kind: "class",
+        members: [
+          {
+            id: "@python/pathlib::Path.constructor",
+            name: "constructor",
+            kind: "constructor",
+            signatures: [{
+              id: "@python/pathlib::Path.constructor(text)",
+              parameters: [{ name: "text", type: { kind: "string" } }],
+            }],
+          },
+          { id: "@python/pathlib::Path.name", name: "name", kind: "property", readonly: true, type: { kind: "string" } },
+          { id: "@python/pathlib::Path.suffix", name: "suffix", kind: "property", readonly: true, type: { kind: "string" } },
+          { id: "@python/pathlib::Path.stem", name: "stem", kind: "property", readonly: true, type: { kind: "string" } },
+          {
+            id: "@python/pathlib::Path.withSuffix",
+            name: "withSuffix",
+            kind: "method",
+            signatures: [{
+              id: "@python/pathlib::Path.withSuffix(suffix)",
+              name: "withSuffix",
+              parameters: [{ name: "suffix", type: { kind: "string" } }],
+              returnType: pathRef,
+            }],
+          },
+          {
+            id: "@python/pathlib::Path.joinpath",
+            name: "joinpath",
+            kind: "method",
+            signatures: [{
+              id: "@python/pathlib::Path.joinpath(other)",
+              name: "joinpath",
+              parameters: [{ name: "other", type: { kind: "string" } }],
+              returnType: pathRef,
+            }],
+          },
+          {
+            id: "@python/pathlib::Path.asPosix",
+            name: "asPosix",
+            kind: "method",
+            signatures: [{
+              id: "@python/pathlib::Path.asPosix()",
+              name: "asPosix",
+              parameters: [],
+              returnType: { kind: "string" },
+            }],
+          },
+        ],
+      }],
+    }],
+    operations: [
+      {
+        exportId: "@python/pathlib::Path",
+        operationKind: "constructor",
+        target: { form: "constructor", import: { style: "from", module: "pathlib", name: "Path" } },
+        resultCarrier: pathCarrier,
+        parameterCarriers: [strCarrier],
+      },
+      {
+        exportId: "@python/pathlib::Path",
+        memberId: "@python/pathlib::Path.name",
+        receiverTypeId: pythonPathlibPathTargetId,
+        operationKind: "property",
+        target: { form: "property", name: "name" },
+        resultCarrier: strCarrier,
+      },
+      {
+        exportId: "@python/pathlib::Path",
+        memberId: "@python/pathlib::Path.suffix",
+        receiverTypeId: pythonPathlibPathTargetId,
+        operationKind: "property",
+        target: { form: "property", name: "suffix" },
+        resultCarrier: strCarrier,
+      },
+      {
+        exportId: "@python/pathlib::Path",
+        memberId: "@python/pathlib::Path.stem",
+        receiverTypeId: pythonPathlibPathTargetId,
+        operationKind: "property",
+        target: { form: "property", name: "stem" },
+        resultCarrier: strCarrier,
+      },
+      {
+        exportId: "@python/pathlib::Path",
+        memberId: "@python/pathlib::Path.withSuffix",
+        receiverTypeId: pythonPathlibPathTargetId,
+        operationKind: "method",
+        target: { form: "method", name: "with_suffix" },
+        resultCarrier: pathCarrier,
+        parameterCarriers: [strCarrier],
+      },
+      {
+        exportId: "@python/pathlib::Path",
+        memberId: "@python/pathlib::Path.joinpath",
+        receiverTypeId: pythonPathlibPathTargetId,
+        operationKind: "method",
+        target: { form: "method", name: "joinpath" },
+        resultCarrier: pathCarrier,
+        parameterCarriers: [strCarrier],
+      },
+      {
+        exportId: "@python/pathlib::Path",
+        memberId: "@python/pathlib::Path.asPosix",
+        receiverTypeId: pythonPathlibPathTargetId,
+        operationKind: "method",
+        target: { form: "method", name: "as_posix" },
+        resultCarrier: strCarrier,
+        parameterCarriers: [],
+      },
+    ],
+    dependencies: [],
+    targetIdentities: { "@python/pathlib::Path": pythonPathlibPathTargetId },
+  });
+}
+
+export function createPythonOsPackage(): PythonProviderPackageImplementation {
+  return createPythonProviderPackage({
+    id: "python-os",
+    displayName: "Python stdlib: os",
+    version: stdlibVersion,
+    modules: [{
+      moduleSpecifier: "@python/os",
+      providerModuleId: "python.os",
+      exports: [
+        {
+          id: "@python/os::getcwd",
+          name: "getcwd",
+          kind: "function",
+          signatures: [{
+            id: "@python/os::getcwd()",
+            name: "getcwd",
+            parameters: [],
+            returnType: { kind: "string" },
+          }],
+        },
+        {
+          id: "@python/os::os",
+          name: "os",
+          kind: "namespace",
+          members: [
+            { id: "@python/os::os.sep", name: "sep", kind: "property", readonly: true, type: { kind: "string" } },
+            { id: "@python/os::os.linesep", name: "linesep", kind: "property", readonly: true, type: { kind: "string" } },
+          ],
+        },
+      ],
+    }],
+    operations: [
+      {
+        exportId: "@python/os::getcwd",
+        operationKind: "method",
+        target: { form: "call", import: { style: "module", module: "os", name: "getcwd" } },
+        resultCarrier: strCarrier,
+        parameterCarriers: [],
+      },
+      {
+        exportId: "@python/os::os",
+        memberId: "@python/os::os.sep",
+        operationKind: "property",
+        target: { form: "static-attribute", import: { style: "module", module: "os" }, name: "sep" },
+        resultCarrier: strCarrier,
+      },
+      {
+        exportId: "@python/os::os",
+        memberId: "@python/os::os.linesep",
+        operationKind: "property",
+        target: { form: "static-attribute", import: { style: "module", module: "os" }, name: "linesep" },
+        resultCarrier: strCarrier,
+      },
+    ],
+    dependencies: [],
+  });
+}
+
+export function createPythonSysPackage(): PythonProviderPackageImplementation {
+  return createPythonProviderPackage({
+    id: "python-sys",
+    displayName: "Python stdlib: sys",
+    version: stdlibVersion,
+    modules: [{
+      moduleSpecifier: "@python/sys",
+      providerModuleId: "python.sys",
+      exports: [{
+        id: "@python/sys::sys",
+        name: "sys",
+        kind: "namespace",
+        members: [
+          { id: "@python/sys::sys.platform", name: "platform", kind: "property", readonly: true, type: { kind: "string" } },
+        ],
+      }],
+    }],
+    operations: [{
+      exportId: "@python/sys::sys",
+      memberId: "@python/sys::sys.platform",
+      operationKind: "property",
+      target: { form: "static-attribute", import: { style: "module", module: "sys" }, name: "platform" },
+      resultCarrier: strCarrier,
+    }],
+    dependencies: [],
+  });
+}
+
+export function createPythonDatetimePackage(): PythonProviderPackageImplementation {
+  const datetimeRef = { kind: "provider-ref" as const, moduleSpecifier: "@python/datetime", exportName: "datetime" };
+  return createPythonProviderPackage({
+    id: "python-datetime",
+    displayName: "Python stdlib: datetime",
+    version: stdlibVersion,
+    modules: [{
+      moduleSpecifier: "@python/datetime",
+      providerModuleId: "python.datetime",
+      exports: [{
+        id: "@python/datetime::datetime",
+        name: "datetime",
+        kind: "class",
+        members: [
+          {
+            id: "@python/datetime::datetime.now",
+            name: "now",
+            kind: "method",
+            static: true,
+            signatures: [{
+              id: "@python/datetime::datetime.now()",
+              name: "now",
+              parameters: [],
+              returnType: datetimeRef,
+            }],
+          },
+          {
+            id: "@python/datetime::datetime.isoformat",
+            name: "isoformat",
+            kind: "method",
+            signatures: [{
+              id: "@python/datetime::datetime.isoformat()",
+              name: "isoformat",
+              parameters: [],
+              returnType: { kind: "string" },
+            }],
+          },
+          {
+            id: "@python/datetime::datetime.year",
+            name: "year",
+            kind: "property",
+            readonly: true,
+            type: { kind: "source-primitive", name: "int64" },
+          },
+        ],
+      }],
+    }],
+    operations: [
+      {
+        exportId: "@python/datetime::datetime",
+        memberId: "@python/datetime::datetime.now",
+        operationKind: "method",
+        target: { form: "static-method", import: { style: "from", module: "datetime", name: "datetime" }, name: "now" },
+        resultCarrier: datetimeCarrier,
+        parameterCarriers: [],
+      },
+      {
+        exportId: "@python/datetime::datetime",
+        memberId: "@python/datetime::datetime.isoformat",
+        receiverTypeId: pythonDatetimeTargetId,
+        operationKind: "method",
+        target: { form: "method", name: "isoformat" },
+        resultCarrier: strCarrier,
+        parameterCarriers: [],
+      },
+      {
+        exportId: "@python/datetime::datetime",
+        memberId: "@python/datetime::datetime.year",
+        receiverTypeId: pythonDatetimeTargetId,
+        operationKind: "property",
+        target: { form: "property", name: "year" },
+        resultCarrier: intCarrier,
+      },
+    ],
+    dependencies: [],
+    targetIdentities: { "@python/datetime::datetime": pythonDatetimeTargetId },
+  });
+}
+
+export function createPythonAsyncioPackage(): PythonProviderPackageImplementation {
+  return createPythonProviderPackage({
+    id: "python-asyncio",
+    displayName: "Python stdlib: asyncio",
+    version: stdlibVersion,
+    modules: [{
+      moduleSpecifier: "@python/asyncio",
+      providerModuleId: "python.asyncio",
+      exports: [{
+        id: "@python/asyncio::sleep",
+        name: "sleep",
+        kind: "function",
+        signatures: [{
+          id: "@python/asyncio::sleep(seconds)",
+          name: "sleep",
+          parameters: [{ name: "seconds", type: { kind: "number" } }],
+          returnType: { kind: "void" },
+        }],
+      }],
+    }],
+    operations: [{
+      exportId: "@python/asyncio::sleep",
+      operationKind: "method",
+      isAsync: true,
+      target: { form: "call", import: { style: "module", module: "asyncio", name: "sleep" } },
+      resultCarrier: noneCarrier,
+      parameterCarriers: [floatCarrier],
+    }],
+    dependencies: [],
+  });
+}
+
+// The json module ships no provider package: `json.loads` returns a dynamic
+// value and `json.dumps` accepts one, so no closed row exists under the
+// current lowering lanes. A future record-typed contract can add it.
+export function createPythonStdlibProviderPackages(): readonly PythonProviderPackageImplementation[] {
+  return [
+    createPythonMathPackage(),
+    createPythonPathlibPackage(),
+    createPythonOsPackage(),
+    createPythonSysPackage(),
+    createPythonDatetimePackage(),
+    createPythonAsyncioPackage(),
+  ];
+}

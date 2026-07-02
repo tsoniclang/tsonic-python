@@ -879,11 +879,12 @@ function resolveCallLikeCarrier(
       // nothing and fails closed downstream.
       return undefined;
     }
-    if (ast.kindName(callee) === KindPropertyAccessExpression) {
-      const receiver = Node_Expression(callee);
-      if (receiver !== undefined) {
-        resolveExpressionCarrier(walk, receiver, sourceFile, undefined);
-      }
+    const receiver = ast.kindName(callee) === KindPropertyAccessExpression ? Node_Expression(callee) : undefined;
+    if (!providerCallShapeMatchesRow(walk, receiver, row)) {
+      return undefined;
+    }
+    if (receiver !== undefined && row.target.form !== "static-method") {
+      resolveExpressionCarrier(walk, receiver, sourceFile, undefined);
     }
     for (const [index, argument] of callArguments.entries()) {
       if (argument !== undefined) {
@@ -1882,11 +1883,12 @@ function tryAsyncProviderAwait(
   if (row === undefined || row.isAsync !== true) {
     return undefined;
   }
-  if (ast.kindName(callee) === KindPropertyAccessExpression) {
-    const receiver = Node_Expression(callee);
-    if (receiver !== undefined) {
-      resolveExpressionCarrier(walk, receiver, sourceFile, undefined);
-    }
+  const receiver = ast.kindName(callee) === KindPropertyAccessExpression ? Node_Expression(callee) : undefined;
+  if (!providerCallShapeMatchesRow(walk, receiver, row)) {
+    return undefined;
+  }
+  if (receiver !== undefined && row.target.form !== "static-method") {
+    resolveExpressionCarrier(walk, receiver, sourceFile, undefined);
   }
   for (const [index, argument] of ast.arguments(operand).entries()) {
     if (argument !== undefined) {
@@ -1954,6 +1956,28 @@ function matchProviderRow(
     }
     return row.signatureId === undefined || row.signatureId === identity.signatureId;
   });
+}
+
+// A receiver names the provider class binding itself (not an instance) when
+// the identifier resolves to a bare provider export identity with no member
+// selection — e.g. the imported `datetime` in `datetime.now()`.
+function isProviderClassBindingReference(walk: PythonFactWalk, receiver: Node | undefined): boolean {
+  if (receiver === undefined || walk.lifecycle.compiler.ast.kindName(receiver) !== KindIdentifier) {
+    return false;
+  }
+  const identity = providerDeclarationIdentityFor(walk, receiver);
+  return identity !== undefined && identity.memberId === undefined;
+}
+
+// Static-method rows lower only through the class binding; every other row
+// form requires an instance receiver (or none, for free calls and
+// constructors). A mismatched shape records nothing and fails closed.
+function providerCallShapeMatchesRow(
+  walk: PythonFactWalk,
+  receiver: Node | undefined,
+  row: PythonProviderOperationRow,
+): boolean {
+  return (row.target.form === "static-method") === isProviderClassBindingReference(walk, receiver);
 }
 
 function providerOperationTargetText(target: PythonProviderOperationForm): string {

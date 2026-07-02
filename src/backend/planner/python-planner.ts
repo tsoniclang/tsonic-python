@@ -87,6 +87,8 @@ export function planPythonArtifacts(input: TargetCompileInput): TargetCompileRes
       text: printPyprojectManifest(manifestPlan.manifest),
     },
     pythonSourceArtifact(`src/${packageName}/__init__.py`, printPythonModule(createPythonModule([]))),
+    // PEP 561 marker: generated modules carry type hints.
+    { kind: "asset", path: `src/${packageName}/py.typed`, text: "" },
   ];
   for (const moduleName of sortedModuleNames) {
     const statements = moduleStatements.get(moduleName) ?? [];

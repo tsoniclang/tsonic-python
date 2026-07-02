@@ -36,6 +36,7 @@ export {
   printPythonTypeAnnotation,
 } from "./print/python-printer.js";
 export { printPyprojectManifest } from "./print/pyproject-printer.js";
+export * from "./source/provider-packages/stdlib.js";
 export { mergePythonHostArtifacts } from "./backend/host-artifacts.js";
 export type {
   PythonHostArtifactContribution,

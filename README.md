@@ -75,6 +75,25 @@ reads, C-style `for` loops desugared to `while`, compound assignment and
 `async def`/`await` gated on async lowering facts (calls to async functions
 lower only as await operands).
 
+Stdlib provider packages ship with the pack (`python-math`, `python-pathlib`,
+`python-os`, `python-sys`, `python-datetime`, `python-asyncio`), each exposing
+only closed contracts: module-style calls and constants, a `pathlib.Path`
+class lane (constructor, properties, receiver methods), `datetime.now()` as a
+static-method row, and awaited-only `asyncio.sleep`. `@python/json` is not
+shipped: `loads`/`dumps` traffic in dynamic values with no closed row shape.
+Concrete stdlib names live only in `src/source/provider-packages/stdlib.ts`.
+
+Generated packages carry a PEP 561 `py.typed` marker. Script output supports
+async entry points: an exported async `main` lowers to a `__main__` that runs
+`asyncio.run(main())`.
+
+GPU host integration: `mergePythonHostArtifacts` accepts host artifact
+contributions from GPU backends (`tsonic-gpu`/`gpu-triton`), places kernel
+modules under `src/<package_name>/kernels/`, merges contributed dependencies
+through the validated pyproject manifest, and fails closed on unsupported
+languages, invalid or duplicate module names, and path collisions. No GPU
+logic lives in this repository.
+
 Source constructs without a finalized lowering lane fail closed with
 `PYTHON_UNSUPPORTED_AST`/`PYTHON_MISSING_TARGET_FACT` diagnostics and zero
 artifacts. That includes sparse arrays, JS array semantics (`at`, `includes`,
