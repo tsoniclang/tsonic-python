@@ -266,6 +266,7 @@ function packageDefinition(overrides) {
     }],
     operations: [],
     dependencies: [],
+    targetIdentities: { "@acme/bad::thing": "acme.bad.Thing" },
     ...overrides,
   };
 }
@@ -361,6 +362,37 @@ test("provider metadata fails at creation for structural inconsistencies", () =>
     })),
     /undeclared export/u,
   );
+});
+
+test("row identities must prove against the declaration model", () => {
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      operations: [{ ...validRow, memberId: "@acme/bad::thing.ghost" }],
+    })),
+    /undeclared member '@acme\/bad::thing\.ghost'/u,
+  );
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      operations: [{ ...validRow, signatureId: "@acme/bad::thing(ghost)" }],
+    })),
+    /undeclared signature '@acme\/bad::thing\(ghost\)'/u,
+  );
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      operations: [{
+        ...validRow,
+        operationKind: "property",
+        receiverTypeId: "acme.bad.Unknown",
+        target: { form: "property", name: "size" },
+      }],
+    })),
+    /receiverTypeId 'acme\.bad\.Unknown', which is not a declared target identity/u,
+  );
+  // Declared identities pass: the export-level signature id validates.
+  const valid = createPythonProviderPackage(packageDefinition({
+    operations: [{ ...validRow, signatureId: "@acme/bad::thing()" }],
+  }));
+  assert.equal(valid.id, "acme-bad");
 });
 
 test("receiver-form rows require a receiverTypeId and isAsync is method-only", () => {

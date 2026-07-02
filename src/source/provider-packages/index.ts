@@ -103,6 +103,10 @@ function validatePythonProviderPackageDefinition(definition: PythonProviderPacka
   const seenSpecifiers = new Set<string>();
   const seenModuleIds = new Set<string>();
   const declaredExportIds = new Set<string>();
+  const declaredMemberIdsByExport = new Map<string, Set<string>>();
+  const declaredSignatureIdsByExport = new Map<string, Set<string>>();
+  const declaredSignatureIdsByMember = new Map<string, Set<string>>();
+  const declaredTargetIdentityIds = new Set(Object.values(definition.targetIdentities ?? {}));
   for (const module of definition.modules) {
     if (module.moduleSpecifier.length === 0) {
       throw new Error(`Provider package '${packageId}': module specifiers must be non-empty.`);
@@ -123,6 +127,21 @@ function validatePythonProviderPackageDefinition(definition: PythonProviderPacka
         throw new Error(`Provider package '${packageId}': duplicate export id '${exportDeclaration.id}'.`);
       }
       declaredExportIds.add(exportDeclaration.id);
+      const memberIds = new Set<string>();
+      const exportSignatureIds = new Set<string>();
+      for (const signature of exportDeclaration.signatures ?? []) {
+        exportSignatureIds.add(signature.id);
+      }
+      for (const member of exportDeclaration.members ?? []) {
+        memberIds.add(member.id);
+        const memberSignatureIds = new Set<string>();
+        for (const signature of member.signatures ?? []) {
+          memberSignatureIds.add(signature.id);
+        }
+        declaredSignatureIdsByMember.set(`${exportDeclaration.id}|${member.id}`, memberSignatureIds);
+      }
+      declaredMemberIdsByExport.set(exportDeclaration.id, memberIds);
+      declaredSignatureIdsByExport.set(exportDeclaration.id, exportSignatureIds);
     }
   }
   const seenRows = new Set<string>();
@@ -147,6 +166,22 @@ function validatePythonProviderPackageDefinition(definition: PythonProviderPacka
       throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' uses a receiver form and requires a receiverTypeId.`);
     }
     validatePythonProviderOperationForm(packageId, rowLabel, row.target);
+    // Row identities must prove against the declaration model: bad metadata
+    // fails at package creation, never as a downstream missing-fact failure.
+    if (row.memberId !== undefined && declaredMemberIdsByExport.get(row.exportId)?.has(row.memberId) !== true) {
+      throw new Error(`Provider package '${packageId}': operation row references undeclared member '${row.memberId}' on export '${row.exportId}'.`);
+    }
+    if (row.signatureId !== undefined) {
+      const declaredSignatureIds = row.memberId === undefined
+        ? declaredSignatureIdsByExport.get(row.exportId)
+        : declaredSignatureIdsByMember.get(`${row.exportId}|${row.memberId}`);
+      if (declaredSignatureIds?.has(row.signatureId) !== true) {
+        throw new Error(`Provider package '${packageId}': operation row references undeclared signature '${row.signatureId}' on '${row.memberId ?? row.exportId}'.`);
+      }
+    }
+    if (row.receiverTypeId !== undefined && !declaredTargetIdentityIds.has(row.receiverTypeId)) {
+      throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' uses receiverTypeId '${row.receiverTypeId}', which is not a declared target identity.`);
+    }
   }
 }
 
