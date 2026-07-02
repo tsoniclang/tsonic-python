@@ -97,6 +97,9 @@ function isRenderablePythonModulePath(path: string): boolean {
 
 function validatePythonProviderPackageDefinition(definition: PythonProviderPackageDefinition): void {
   const packageId = definition.id;
+  const seenSpecifiers = new Set<string>();
+  const seenModuleIds = new Set<string>();
+  const declaredExportIds = new Set<string>();
   for (const module of definition.modules) {
     if (module.moduleSpecifier.length === 0) {
       throw new Error(`Provider package '${packageId}': module specifiers must be non-empty.`);
@@ -104,9 +107,26 @@ function validatePythonProviderPackageDefinition(definition: PythonProviderPacka
     if (module.providerModuleId.length === 0) {
       throw new Error(`Provider package '${packageId}': provider module ids must be non-empty.`);
     }
+    if (seenSpecifiers.has(module.moduleSpecifier)) {
+      throw new Error(`Provider package '${packageId}': duplicate module specifier '${module.moduleSpecifier}'.`);
+    }
+    seenSpecifiers.add(module.moduleSpecifier);
+    if (seenModuleIds.has(module.providerModuleId)) {
+      throw new Error(`Provider package '${packageId}': duplicate provider module id '${module.providerModuleId}'.`);
+    }
+    seenModuleIds.add(module.providerModuleId);
+    for (const exportDeclaration of module.exports) {
+      if (declaredExportIds.has(exportDeclaration.id)) {
+        throw new Error(`Provider package '${packageId}': duplicate export id '${exportDeclaration.id}'.`);
+      }
+      declaredExportIds.add(exportDeclaration.id);
+    }
   }
   const seenRows = new Set<string>();
   for (const row of definition.operations) {
+    if (!declaredExportIds.has(row.exportId)) {
+      throw new Error(`Provider package '${packageId}': operation row references undeclared export '${row.exportId}'.`);
+    }
     const rowLabel = row.memberId ?? row.exportId;
     const rowKey = [row.exportId, row.memberId ?? "", row.signatureId ?? "", row.receiverTypeId ?? "", row.operationKind].join("|");
     if (seenRows.has(rowKey)) {

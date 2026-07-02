@@ -1,4 +1,4 @@
-import type { AstReader, Node, TargetTypeRef } from "@tsonic/tsts";
+import type { Node, TargetTypeRef } from "@tsonic/tsts";
 import {
   BinaryExpression_Left,
   BinaryExpression_OperatorToken,
@@ -45,6 +45,7 @@ import {
   TryStatement_CatchClause,
   TryStatement_FinallyBlock,
   TryStatement_TryBlock,
+  hasSpreadToken,
 } from "../../common/source-ast.js";
 import { isPythonBoolCarrier, isPythonListCarrier } from "../../source/python-target-types.js";
 import { isValidPythonIdentifier } from "../../common/python-names.js";
@@ -688,17 +689,6 @@ function planTryStatement(node: Node, context: PythonPlanContext): readonly Pyth
   }];
 }
 
-// Rest bindings carry a `...` prefix ahead of the binding name; the public
-// reader exposes no token accessor, so the prefix span decides (mirroring the
-// unary-operator text approach in the shared AST helpers).
-function hasSpreadPrefix(ast: AstReader, element: Node, nameNode: Node): boolean {
-  const sourceText = ast.getSourceText(ast.getSourceFile(element));
-  const start = ast.pos(element);
-  const end = ast.pos(nameNode);
-  const prefix = start < 0 || end < start ? "" : sourceText.slice(start, end);
-  return prefix.includes("...");
-}
-
 // Destructuring lowers only against an identifier initializer: identifiers
 // are effect-free to re-plan per binding, so no synthetic temporary is
 // needed (source names cannot express one under the naming policy).
@@ -747,7 +737,7 @@ function planDestructuringDeclaration(
     const bindingName = ast.name(element);
     if (ast.kindName(element) !== "KindBindingElement" || bindingName === undefined ||
       ast.kindName(bindingName) !== KindIdentifier || Node_Initializer(element) !== undefined ||
-      hasSpreadPrefix(ast, element, bindingName)) {
+      hasSpreadToken(element)) {
       context.diagnostics.push(unsupportedConstructDiagnostic(
         diagnosticInput(context, element),
         "python.backend.destructuring",

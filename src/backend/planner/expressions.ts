@@ -20,6 +20,7 @@ import {
   Node_Expression,
   Node_Initializer,
   PrefixUnaryExpression_Operand,
+  unwrapParenthesized,
 } from "../../common/source-ast.js";
 import { pythonTargetOperationFactKey } from "../../source/python-facts/keys.js";
 import type {
@@ -738,8 +739,9 @@ function planAwaitExpression(node: Node, context: PythonPlanContext): PythonExpr
     return undefined;
   }
   const operandNode = Node_Expression(node);
-  if (operandNode !== undefined) {
-    context.awaitedCalls?.add(operandNode);
+  const awaitedCall = unwrapParenthesized(context.input.ast, operandNode);
+  if (awaitedCall !== undefined) {
+    context.awaitedCalls?.add(awaitedCall);
   }
   const operand = operandNode === undefined ? undefined : planExpression(operandNode, context);
   return operand === undefined ? undefined : { kind: "await", operand };

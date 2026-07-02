@@ -197,6 +197,29 @@ export async function doubled(): Promise<int32> {
   assert.match(text, /value: int = await base\(\)/u);
 });
 
+test("parenthesized await operands normalize to the awaited call", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import type { int32 } from "@tsonic/core/types.js";
+
+export async function slow(value: int32): Promise<int32> {
+  return value;
+}
+
+export async function wrapped(value: int32): Promise<int32> {
+  const result: int32 = await (slow(value));
+  return result;
+}
+`,
+    },
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const text = artifactText(result, "src/tsonic_generated/index.py");
+  assert.match(text, /result: int = await slow\(value\)/u);
+});
+
 test("C-style for loops desugar to init plus while", () => {
   const { result } = compilePython({
     files: {

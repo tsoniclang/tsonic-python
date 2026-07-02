@@ -189,7 +189,17 @@ function packageDefinition(overrides) {
     modules: [{
       moduleSpecifier: "@acme/bad",
       providerModuleId: "acme.bad",
-      exports: [],
+      exports: [{
+        id: "@acme/bad::thing",
+        name: "thing",
+        kind: "function",
+        signatures: [{
+          id: "@acme/bad::thing()",
+          name: "thing",
+          parameters: [],
+          returnType: { kind: "string" },
+        }],
+      }],
     }],
     operations: [],
     dependencies: [],
@@ -256,6 +266,37 @@ test("provider package creation rejects empty module identities and missing carr
       operations: [{ ...validRow, resultCarrier: undefined }],
     })),
     /missing a result carrier/u,
+  );
+});
+
+test("provider metadata fails at creation for structural inconsistencies", () => {
+  const goodModule = {
+    moduleSpecifier: "@acme/bad",
+    providerModuleId: "acme.bad",
+    exports: [{
+      id: "@acme/bad::thing",
+      name: "thing",
+      kind: "function",
+      signatures: [{ id: "@acme/bad::thing()", name: "thing", parameters: [], returnType: { kind: "string" } }],
+    }],
+  };
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      modules: [goodModule, { ...goodModule, providerModuleId: "acme.other" }],
+    })),
+    /duplicate module specifier/u,
+  );
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      modules: [goodModule, { ...goodModule, moduleSpecifier: "@acme/other" }],
+    })),
+    /duplicate provider module id|duplicate export id/u,
+  );
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      operations: [{ ...validRow, exportId: "@acme/bad::ghost" }],
+    })),
+    /undeclared export/u,
   );
 });
 

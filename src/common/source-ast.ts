@@ -63,12 +63,52 @@ export const KindExclamationToken = "KindExclamationToken";
 export const KindPlusPlusToken = "KindPlusPlusToken";
 export const KindMinusMinusToken = "KindMinusMinusToken";
 
-function nodeField(node: Node | undefined, fieldName: string): Node | undefined {
+// Generic duck-typed field access for AST data shapes without a dedicated
+// accessor below. Prefer the named accessors; this is the single place raw
+// field reads are allowed.
+export function Node_SyntaxField(node: Node | undefined, fieldName: string): Node | undefined {
   if (node === undefined) {
     return undefined;
   }
   const value = (node as unknown as Record<string, unknown>)[fieldName];
   return typeof value === "object" && value !== null ? (value as Node) : undefined;
+}
+
+function nodeField(node: Node | undefined, fieldName: string): Node | undefined {
+  return Node_SyntaxField(node, fieldName);
+}
+
+export function Node_DotDotDotToken(node: Node | undefined): Node | undefined {
+  return nodeField(node, "DotDotDotToken");
+}
+
+export function Node_PropertyName(node: Node | undefined): Node | undefined {
+  return nodeField(node, "PropertyName");
+}
+
+export function Node_PostfixToken(node: Node | undefined): Node | undefined {
+  return nodeField(node, "PostfixToken");
+}
+
+export function Node_QuestionToken(node: Node | undefined): Node | undefined {
+  return nodeField(node, "QuestionToken");
+}
+
+// Exact spread/rest detection: the AST exposes the token as a field; never
+// inferred from raw source text.
+export function hasSpreadToken(node: Node | undefined): boolean {
+  return Node_DotDotDotToken(node) !== undefined;
+}
+
+export function unwrapParenthesized(ast: AstReader, node: Node | undefined): Node | undefined {
+  let current = node;
+  while (current !== undefined && ast.kindName(current) === KindParenthesizedExpression) {
+    current = Node_Expression(current);
+    if (current === undefined) {
+      return undefined;
+    }
+  }
+  return current;
 }
 
 export function Node_Text(node: Node | undefined): string {

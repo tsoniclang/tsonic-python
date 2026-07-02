@@ -30,6 +30,19 @@ const sourceFiles = collectFiles(sourceRoot, ".ts").map((path) => ({
   text: readFileSync(path, "utf8"),
 }));
 
+test("no NUL or control bytes in product sources", () => {
+  // Tab, LF, and CR are the only control characters allowed in source text;
+  // invisible bytes (NUL separators and friends) are unreviewable.
+  for (const { path, text } of sourceFiles) {
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) {
+        assert.fail(`${path} contains control byte 0x${code.toString(16).padStart(2, "0")} at offset ${index}`);
+      }
+    }
+  }
+});
+
 test("no internal TSTS imports", () => {
   for (const { path, text } of sourceFiles) {
     assert.doesNotMatch(text, /from "@tsonic\/tsts\/.+"/u, `${path} imports a deep tsts path`);

@@ -79,6 +79,11 @@ import {
   TypeReferenceNode_TypeName,
   getPostfixUnaryOperatorText,
   getPrefixUnaryOperatorText,
+  Node_DotDotDotToken,
+  Node_PostfixToken,
+  Node_PropertyName,
+  Node_QuestionToken,
+  unwrapParenthesized,
 } from "../../common/source-ast.js";
 import {
   isPythonBoolCarrier,
@@ -227,16 +232,6 @@ export function recordPythonFactsBeforeFinalization(
   }
 }
 
-// Duck-typed field access against the TS-Go AST data shapes, matching the
-// shared source-ast helpers.
-function nodeSyntaxField(node: Node | undefined, fieldName: string): Node | undefined {
-  if (node === undefined) {
-    return undefined;
-  }
-  const value = (node as unknown as Record<string, unknown>)[fieldName];
-  return typeof value === "object" && value !== null ? (value as Node) : undefined;
-}
-
 // Async declarations carry the unwrapped Promise<T> payload as their return
 // carrier; the async lowering itself is marked with the async-function fact.
 function promiseInnerCarrier(walk: PythonFactWalk, typeNode: Node | undefined): TargetTypeRef | undefined {
@@ -331,8 +326,8 @@ function plainBindingElements(walk: PythonFactWalk, pattern: Node): readonly { e
     if (element === undefined || ast.kindName(element) !== KindBindingElement) {
       return undefined;
     }
-    if (nodeSyntaxField(element, "DotDotDotToken") !== undefined ||
-        nodeSyntaxField(element, "PropertyName") !== undefined ||
+    if (Node_DotDotDotToken(element) !== undefined ||
+        Node_PropertyName(element) !== undefined ||
         Node_Initializer(element) !== undefined) {
       return undefined;
     }
@@ -1337,7 +1332,7 @@ function registerInterfaceFacts(walk: PythonFactWalk, declaration: Node): void {
     if (member === undefined || ast.kindName(member) !== KindPropertySignature) {
       return;
     }
-    if (nodeSyntaxField(member, "PostfixToken") !== undefined) {
+    if (Node_PostfixToken(member) !== undefined) {
       return;
     }
     const nameNode = ast.name(member);
@@ -1364,8 +1359,8 @@ function parameterIsProven(walk: PythonFactWalk, parameter: Node): boolean {
   if (ast.modifiers(parameter).some((modifier) => modifier !== undefined)) {
     return false;
   }
-  if (nodeSyntaxField(parameter, "DotDotDotToken") !== undefined ||
-      nodeSyntaxField(parameter, "QuestionToken") !== undefined ||
+  if (Node_DotDotDotToken(parameter) !== undefined ||
+      Node_QuestionToken(parameter) !== undefined ||
       Node_Initializer(parameter) !== undefined) {
     return false;
   }
@@ -1401,7 +1396,7 @@ function classDeclarationIsProven(walk: PythonFactWalk, declaration: Node): bool
       // Minimum field lane: annotated instance fields assigned in the
       // constructor body; declaration-site initializers stay unproven.
       if (ast.hasModifierKind(member, "static") ||
-          nodeSyntaxField(member, "PostfixToken") !== undefined ||
+          Node_PostfixToken(member) !== undefined ||
           Node_Initializer(member) !== undefined) {
         return false;
       }
@@ -1426,7 +1421,7 @@ function classDeclarationIsProven(walk: PythonFactWalk, declaration: Node): bool
       }
       if (memberKind === KindMethodDeclaration) {
         if (ast.typeParameters(member).some((parameter) => parameter !== undefined) ||
-            nodeSyntaxField(member, "PostfixToken") !== undefined) {
+            Node_PostfixToken(member) !== undefined) {
           return false;
         }
         const nameNode = ast.name(member);
@@ -1808,7 +1803,7 @@ function recordThrowFacts(walk: PythonFactWalk, statement: Node, sourceFile: Sou
 // Promise payload.
 function resolveAwaitCarrier(walk: PythonFactWalk, expression: Node, sourceFile: SourceFile): TargetTypeRef | undefined {
   const { ast, checker } = walk.lifecycle.compiler;
-  const operand = Node_Expression(expression);
+  const operand = unwrapParenthesized(ast, Node_Expression(expression));
   if (operand === undefined || ast.kindName(operand) !== KindCallExpression) {
     return undefined;
   }
