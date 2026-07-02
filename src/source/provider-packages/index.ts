@@ -207,7 +207,7 @@ function validatePythonProviderOperationForm(packageId: string, rowLabel: string
   } else if (binding.name !== undefined) {
     rejectName(binding.name, "import name");
   }
-  if (form.form === "static-attribute") {
+  if (form.form === "static-attribute" || form.form === "static-method") {
     rejectName(form.name, "attribute name");
   }
 }

@@ -13,6 +13,12 @@ import {
   compilePython,
   fixturePackagesRoot,
 } from "./helpers/python-session.mjs";
+import {
+  createPythonAsyncioPackage,
+  createPythonMathPackage,
+  createPythonOsPackage,
+  createPythonPathlibPackage,
+} from "../dist/source/provider-packages/stdlib.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const generatedRoot = join(repositoryRoot, ".temp", "generated");
@@ -350,6 +356,179 @@ export async function load(key: string): Promise<string> {
     },
   });
   assert.match(run.stdout, /AIO-OK/u);
+});
+
+test("stdlib provider rows execute against the real Python standard library", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import { sqrt, floor } from "@python/math";
+import { Path } from "@python/pathlib";
+import { getcwd, os } from "@python/os";
+import type { float64, int64 } from "@tsonic/core/types.js";
+
+export function root(x: float64): float64 {
+  return sqrt(x);
+}
+
+export function wholes(x: float64): int64 {
+  return floor(x);
+}
+
+export function renamed(p: string): string {
+  return new Path(p).withSuffix(".md").suffix;
+}
+
+export function separator(): string {
+  return os.sep;
+}
+
+export function here(): string {
+  return getcwd();
+}
+`,
+    },
+    packages: [createPythonMathPackage(), createPythonPathlibPackage(), createPythonOsPackage()],
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_stdlib", result.artifacts);
+  runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot });
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "from tsonic_generated.index import here, renamed, root, separator, wholes",
+    "",
+    "assert root(9.0) == 3.0, root(9.0)",
+    "assert wholes(3.9) == 3, wholes(3.9)",
+    "assert wholes(-1.5) == -2, wholes(-1.5)",
+    'assert renamed("notes.txt") == ".md", renamed("notes.txt")',
+    "assert len(separator()) == 1, separator()",
+    "assert isinstance(here(), str) and len(here()) > 0",
+    'print("STDLIB-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
+  assert.match(run.stdout, /STDLIB-OK/u);
+});
+
+test("awaited asyncio.sleep and a project async function execute through asyncio.run", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import { sleep } from "@python/asyncio";
+import type { int32 } from "@tsonic/core/types.js";
+
+export async function slowDouble(value: int32): Promise<int32> {
+  return value + value;
+}
+
+export async function pausedQuadruple(value: int32): Promise<int32> {
+  await sleep(0.001);
+  const once: int32 = await slowDouble(value);
+  return await slowDouble(once);
+}
+`,
+    },
+    packages: [createPythonAsyncioPackage()],
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_stdlib_async", result.artifacts);
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "import asyncio",
+    "",
+    "from tsonic_generated.index import pausedQuadruple",
+    "",
+    "assert asyncio.run(pausedQuadruple(3)) == 12",
+    'print("STDLIB-ASYNC-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
+  assert.match(run.stdout, /STDLIB-ASYNC-OK/u);
+});
+
+test("cross-module async calls execute through asyncio.run", () => {
+  const { result } = compilePython({
+    files: {
+      "worker.ts": `
+import type { int32 } from "@tsonic/core/types.js";
+
+export async function crunch(value: int32): Promise<int32> {
+  return value * 3;
+}
+`,
+      "index.ts": `
+import { crunch } from "./worker.js";
+import type { int32 } from "@tsonic/core/types.js";
+
+export async function orchestrate(value: int32): Promise<int32> {
+  const once: int32 = await crunch(value);
+  const twice: int32 = await crunch(once);
+  return twice;
+}
+`,
+    },
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_async_cross", result.artifacts);
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "import asyncio",
+    "",
+    "from tsonic_generated.index import orchestrate",
+    "",
+    "assert asyncio.run(orchestrate(2)) == 18",
+    'print("CROSS-ASYNC-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
+  assert.match(run.stdout, /CROSS-ASYNC-OK/u);
+});
+
+test("async script entry runs via asyncio.run under python -m", () => {
+  const target = { id: "python", options: { outputType: "script", packageName: "async_cli" } };
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import type { int32 } from "@tsonic/core/types.js";
+
+export async function step(value: int32): Promise<int32> {
+  return value + 1;
+}
+
+export async function main(): Promise<void> {
+  const first: int32 = await step(1);
+  const second: int32 = await step(first);
+}
+`,
+    },
+    target,
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const mainArtifact = result.artifacts.find((artifact) => artifact.path === "src/async_cli/__main__.py");
+  assert.ok(mainArtifact);
+  assert.match(mainArtifact.text, /import asyncio/u);
+  assert.match(mainArtifact.text, /asyncio\.run\(main\(\)\)/u);
+
+  const projectRoot = materialize("exec_async_script", result.artifacts);
+  runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot });
+  runPython(["-m", "async_cli"], {
+    cwd: projectRoot,
+    timeout: 20000,
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
 });
 
 test("generated modules parse under the python ast module", () => {

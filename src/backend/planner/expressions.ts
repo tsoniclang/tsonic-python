@@ -214,6 +214,20 @@ export function planNumericLiteral(node: Node, context: PythonPlanContext): Pyth
 
 function planIdentifier(node: Node, context: PythonPlanContext): PythonExpression | undefined {
   const { ast } = context.input;
+  // Identifiers bound to provider operations render from row metadata; a
+  // provider-backed identifier must never fall through to a bare name.
+  const fact = pythonOperationFact(node, context);
+  if (fact !== undefined && fact.kind === "provider-operation") {
+    if (fact.target.form === "static-attribute") {
+      return { kind: "attribute", value: importBindingExpression(context, fact.target.import), name: fact.target.name };
+    }
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.identifier",
+      "Provider-bound identifier selected a non-attribute Python operation.",
+    ));
+    return undefined;
+  }
   const reference = context.input.analysis.getProjectSourceReferenceForNode(node, { sourceFile: context.sourceFile });
   if (reference !== undefined) {
     const declarationModule = context.moduleNameByFileName.get(ast.getFileName(reference.sourceFile));
@@ -370,6 +384,13 @@ function planProviderOperationExpression(
         return undefined;
       }
       return { kind: "attribute", value: importBindingExpression(context, form.import), name: form.name };
+    }
+    case "static-method": {
+      return {
+        kind: "call",
+        callee: { kind: "attribute", value: importBindingExpression(context, form.import), name: form.name },
+        args,
+      };
     }
     case "index": {
       const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);

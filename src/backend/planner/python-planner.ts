@@ -1,4 +1,5 @@
 import { providerVirtualDeclarationFactKey } from "@tsonic/tsts";
+import { pythonAsyncFunctionFactKey } from "../../source/python-facts/keys.js";
 import type { Node, SourceFile } from "@tsonic/tsts";
 import type {
   TargetArtifact,
@@ -86,6 +87,8 @@ export function planPythonArtifacts(input: TargetCompileInput): TargetCompileRes
       text: printPyprojectManifest(manifestPlan.manifest),
     },
     pythonSourceArtifact(`src/${packageName}/__init__.py`, printPythonModule(createPythonModule([]))),
+    // PEP 561 marker: generated modules carry type hints.
+    { kind: "asset", path: `src/${packageName}/py.typed`, text: "" },
   ];
   for (const moduleName of sortedModuleNames) {
     const statements = moduleStatements.get(moduleName) ?? [];
@@ -95,16 +98,24 @@ export function planPythonArtifacts(input: TargetCompileInput): TargetCompileRes
     ));
   }
   if (outputType === "script" && scriptEntry !== undefined) {
+    const entryCall: PythonStatement = {
+      kind: "expr",
+      expression: scriptEntry.isAsync
+        ? {
+            kind: "call",
+            callee: { kind: "attribute", value: { kind: "name", name: "asyncio" }, name: "run" },
+            args: [{ kind: "call", callee: { kind: "name", name: scriptEntry.functionName }, args: [] }],
+          }
+        : { kind: "call", callee: { kind: "name", name: scriptEntry.functionName }, args: [] },
+    };
     const mainModule = createPythonModule([
+      ...(scriptEntry.isAsync ? [{ kind: "import", module: "asyncio" } as PythonStatement] : []),
       {
         kind: "from-import",
         module: `${packageName}.${scriptEntry.moduleName}`,
         names: [{ name: scriptEntry.functionName }],
       },
-      {
-        kind: "expr",
-        expression: { kind: "call", callee: { kind: "name", name: scriptEntry.functionName }, args: [] },
-      },
+      entryCall,
     ]);
     artifacts.push(pythonSourceArtifact(`src/${packageName}/__main__.py`, printPythonModule(mainModule)));
   }
@@ -347,6 +358,7 @@ function renderCollectedImports(
 interface PythonScriptEntry {
   readonly moduleName: string;
   readonly functionName: string;
+  readonly isAsync: boolean;
 }
 
 function resolveScriptEntry(
@@ -383,11 +395,16 @@ function resolveScriptEntry(
     const returnCarrier = returnTypeNode === undefined
       ? undefined
       : input.facts.getRuntimeCarrierFact(returnTypeNode)?.carrier;
-    if (!input.ast.hasModifierKind(statement, "export") || !isPythonNoneCarrier(returnCarrier) || input.ast.hasModifierKind(statement, "async")) {
-      // Async entry points would require an implicit event loop selection.
+    const isAsync = input.ast.hasModifierKind(statement, "async");
+    // Async entry points lower through an explicit asyncio.run wrapper in the
+    // generated __main__; they require the finalized async lowering fact.
+    if (isAsync && input.facts.getFact(statement, pythonAsyncFunctionFactKey) === undefined) {
       break;
     }
-    return { moduleName, functionName: "main" };
+    if (!input.ast.hasModifierKind(statement, "export") || !isPythonNoneCarrier(returnCarrier)) {
+      break;
+    }
+    return { moduleName, functionName: "main", isAsync };
   }
   diagnostics.push({
     code: "PYTHON_MISSING_ENTRYPOINT",

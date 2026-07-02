@@ -9,6 +9,7 @@ import type {
 import type { CompilerExtension } from "@tsonic/tsts";
 import { createPythonBackend } from "../backend/python-backend.js";
 import { createPythonTargetSemanticsExtension } from "../source/python-target-semantics/index.js";
+import { createPythonStdlibProviderPackages } from "../source/provider-packages/stdlib.js";
 import { validatePythonTargetOptions } from "../options/python-target-options.js";
 import { createPythonToolchain } from "../toolchain/python-toolchain.js";
 
@@ -26,7 +27,7 @@ export function createPythonTargetPack(): TargetPack {
         return [createPythonTargetSemanticsExtension(context)];
       },
     },
-    packages: [],
+    packages: [...createPythonStdlibProviderPackages()],
     surfaces: [],
     createBackend(context: TargetBackendContext): TargetBackend {
       validatePythonTargetOptions(context.target);

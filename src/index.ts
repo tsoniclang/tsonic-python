@@ -36,6 +36,13 @@ export {
   printPythonTypeAnnotation,
 } from "./print/python-printer.js";
 export { printPyprojectManifest } from "./print/pyproject-printer.js";
+export * from "./source/provider-packages/stdlib.js";
+export { mergePythonHostArtifacts } from "./backend/host-artifacts.js";
+export type {
+  PythonHostArtifactContribution,
+  PythonHostArtifactInput,
+  PythonHostModuleContribution,
+} from "./backend/host-artifacts.js";
 export { createPythonToolchain } from "./toolchain/python-toolchain.js";
 export { createPythonTargetSemanticsExtension, pythonTargetSemanticsExtensionId, recordPythonFactsBeforeFinalization } from "./source/python-target-semantics/index.js";
 export {
