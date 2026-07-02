@@ -16,6 +16,13 @@ export type PythonProviderOperationForm =
   | { readonly form: "method"; readonly name: string }
   | { readonly form: "property"; readonly name: string }
   | { readonly form: "static-attribute"; readonly import: PythonImportBinding; readonly name: string }
+  | {
+      // Static method called on an imported class or module binding (e.g.
+      // datetime.now()).
+      readonly form: "static-method";
+      readonly import: PythonImportBinding;
+      readonly name: string;
+    }
   | { readonly form: "index" }
   | {
       // Python builtin called with the receiver as sole argument (e.g. the
