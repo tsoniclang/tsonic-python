@@ -16,7 +16,13 @@ export type PythonProviderOperationForm =
   | { readonly form: "method"; readonly name: string }
   | { readonly form: "property"; readonly name: string }
   | { readonly form: "static-attribute"; readonly import: PythonImportBinding; readonly name: string }
-  | { readonly form: "index" };
+  | { readonly form: "index" }
+  | {
+      // Python builtin called with the receiver as sole argument (e.g. the
+      // selected error policy lowers `.message` reads to str(error)).
+      readonly form: "builtin-call";
+      readonly name: string;
+    };
 
 export type PythonListOperation = "index-read" | "index-write" | "len" | "append";
 

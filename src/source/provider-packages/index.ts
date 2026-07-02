@@ -126,7 +126,7 @@ function validatePythonProviderOperationForm(packageId: string, rowLabel: string
       throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' has an invalid Python ${what} '${name}'.`);
     }
   };
-  if (form.form === "method" || form.form === "property") {
+  if (form.form === "method" || form.form === "property" || form.form === "builtin-call") {
     rejectName(form.name, "member name");
     return;
   }
