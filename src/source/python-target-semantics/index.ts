@@ -940,7 +940,8 @@ function providerOperationTargetText(target: PythonProviderOperationForm): strin
     }
     case "method":
     case "property":
-    case "static-attribute": {
+    case "static-attribute":
+    case "builtin-call": {
       return target.name;
     }
     case "index": {

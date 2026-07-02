@@ -358,6 +358,13 @@ function planProviderOperationExpression(
       }
       return { kind: "subscript", value: receiver, index };
     }
+    case "builtin-call": {
+      const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
+      if (receiver === undefined || args.length !== 0) {
+        return undefined;
+      }
+      return { kind: "call", callee: { kind: "name", name: form.name }, args: [receiver] };
+    }
   }
 }
 
