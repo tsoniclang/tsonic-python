@@ -1,4 +1,5 @@
-import type { SourceFile } from "@tsonic/tsts";
+import { providerVirtualDeclarationFactKey } from "@tsonic/tsts";
+import type { Node, SourceFile } from "@tsonic/tsts";
 import type {
   TargetArtifact,
   TargetCompileInput,
@@ -22,7 +23,8 @@ import { printPyprojectManifest } from "../../print/pyproject-printer.js";
 import { planPyprojectManifest } from "./pyproject.js";
 import { unsupportedStatementDiagnostic } from "./diagnostics.js";
 import { isValidPythonModuleName } from "../../common/python-names.js";
-import type { PythonPlanContext } from "./plan-context.js";
+import { planFunctionDeclaration } from "./functions.js";
+import type { PythonImportRequirement, PythonPlanContext } from "./plan-context.js";
 
 export function planPythonArtifacts(input: TargetCompileInput): TargetCompileResult {
   const diagnostics: TargetDiagnostic[] = [];
@@ -38,14 +40,17 @@ export function planPythonArtifacts(input: TargetCompileInput): TargetCompileRes
     if (moduleName === undefined) {
       continue;
     }
+    const collectedImports = new Map<string, PythonImportRequirement>();
     const context: PythonPlanContext = {
       input,
       sourceFile,
       moduleName,
       moduleNameByFileName,
       diagnostics,
+      collectedImports,
     };
-    moduleStatements.set(moduleName, planModuleStatements(context));
+    const planned = planModuleStatements(context);
+    moduleStatements.set(moduleName, [...renderCollectedImports(collectedImports), ...planned]);
   }
 
   const manifestPlan = planPyprojectManifest(input.target, input.runtimeReferences);
@@ -168,16 +173,14 @@ function planModuleStatements(context: PythonPlanContext): readonly PythonStatem
       continue;
     }
     if (kind === KindImportDeclaration) {
-      // Only proven type-only imports are erased. Value and bare side-effect
-      // imports have runtime meaning and must fail closed until a lowering
-      // lane consumes them.
-      if (ast.isTypeOnlyImportDeclaration(statement)) {
-        continue;
+      planImportDeclaration(statement, context);
+      continue;
+    }
+    if (kind === KindFunctionDeclaration) {
+      const planned = planFunctionDeclaration(statement, context);
+      if (planned !== undefined) {
+        statements.push(planned);
       }
-      context.diagnostics.push(unsupportedStatementDiagnostic(
-        { ast, sourceFile: context.sourceFile, node: statement },
-        "python.backend.import",
-      ));
       continue;
     }
     context.diagnostics.push(unsupportedStatementDiagnostic(
@@ -186,6 +189,128 @@ function planModuleStatements(context: PythonPlanContext): readonly PythonStatem
     ));
   }
   return statements;
+}
+
+// Type-only imports are erased. Value imports are erased only when every
+// imported binding is proven (a target binding fact from a provider package,
+// or a resolution to a compiled project source module); reference sites
+// re-derive their own structural imports. Anything else, including bare
+// side-effect imports, fails closed.
+function planImportDeclaration(statement: Node, context: PythonPlanContext): void {
+  const { ast } = context.input;
+  if (ast.isTypeOnlyImportDeclaration(statement)) {
+    return;
+  }
+  const bindingNames = collectImportBindingNames(statement, context);
+  const proven = bindingNames.length > 0 &&
+    bindingNames.every((nameNode) => isProvenImportBinding(nameNode, context));
+  if (!proven) {
+    context.diagnostics.push(unsupportedStatementDiagnostic(
+      { ast, sourceFile: context.sourceFile, node: statement },
+      "python.backend.import",
+    ));
+  }
+}
+
+function collectImportBindingNames(statement: Node, context: PythonPlanContext): readonly Node[] {
+  const { ast } = context.input;
+  const names: Node[] = [];
+  const visit = (candidate: Node): void => {
+    const kind = ast.kindName(candidate);
+    if (kind === "KindImportSpecifier" || kind === "KindNamespaceImport") {
+      if (!ast.isTypeOnlyImportDeclaration(candidate)) {
+        names.push(Node_Name(candidate) ?? candidate);
+      }
+      return;
+    }
+    if (kind === "KindImportClause") {
+      const defaultName = Node_Name(candidate);
+      if (defaultName !== undefined) {
+        names.push(defaultName);
+      }
+    }
+    ast.forEachChild(candidate, (child) => {
+      if (child !== undefined) {
+        visit(child);
+      }
+    });
+  };
+  ast.forEachChild(statement, (child) => {
+    if (child !== undefined) {
+      visit(child);
+    }
+  });
+  return names;
+}
+
+function isProvenImportBinding(nameNode: Node, context: PythonPlanContext): boolean {
+  const { input } = context;
+  if (input.targetFacts.getTargetBinding(nameNode) !== undefined) {
+    return true;
+  }
+  if (input.targetFacts.getTargetBindingForReference(nameNode, { sourceFile: context.sourceFile }) !== undefined) {
+    return true;
+  }
+  if (isProviderDeclaredBinding(nameNode, context)) {
+    return true;
+  }
+  const reference = input.analysis.getProjectSourceReferenceForNode(nameNode, { sourceFile: context.sourceFile });
+  if (reference === undefined) {
+    return false;
+  }
+  return context.moduleNameByFileName.get(input.ast.getFileName(reference.sourceFile)) !== undefined;
+}
+
+// A binding is proven when its (alias-resolved) symbol declarations carry the
+// provider virtual declaration fact: the module is owned by a selected
+// provider package, so reference sites lower through provider-operation facts.
+function isProviderDeclaredBinding(nameNode: Node, context: PythonPlanContext): boolean {
+  const { input } = context;
+  const options = { sourceFile: context.sourceFile };
+  for (const symbol of [
+    input.analysis.getSymbolAtLocation(nameNode, options),
+    input.analysis.getResolvedSymbol(nameNode, options),
+  ]) {
+    for (const declaration of input.analysis.getSymbolDeclarations(symbol)) {
+      if (input.facts.getFact(declaration, providerVirtualDeclarationFactKey) !== undefined) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Deterministic import emission: from-imports of the same module merge into
+// one statement with sorted names; statements sort by module, then first name.
+function renderCollectedImports(
+  requirements: ReadonlyMap<string, PythonImportRequirement>,
+): readonly PythonStatement[] {
+  const moduleImports = new Set<string>();
+  const fromImports = new Map<string, Set<string>>();
+  for (const requirement of requirements.values()) {
+    if (requirement.kind === "import") {
+      moduleImports.add(requirement.module);
+      continue;
+    }
+    const names = fromImports.get(requirement.module) ?? new Set<string>();
+    names.add(requirement.name);
+    fromImports.set(requirement.module, names);
+  }
+  const entries: { readonly module: string; readonly name: string; readonly statement: PythonStatement }[] = [];
+  for (const module of moduleImports) {
+    entries.push({ module, name: "", statement: { kind: "import", module } });
+  }
+  for (const [module, names] of fromImports) {
+    const sortedNames = [...names].sort((left, right) => left.localeCompare(right, "en"));
+    entries.push({
+      module,
+      name: sortedNames[0] ?? "",
+      statement: { kind: "from-import", module, names: sortedNames.map((name) => ({ name })) },
+    });
+  }
+  entries.sort((left, right) =>
+    left.module.localeCompare(right.module, "en") || left.name.localeCompare(right.name, "en"));
+  return entries.map((entry) => entry.statement);
 }
 
 interface PythonScriptEntry {

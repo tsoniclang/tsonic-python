@@ -21,12 +21,35 @@ kernel IR (`tsonic-gpu`), or Triton lowering (`gpu-triton`).
 
 Slice P1: target pack registration, target option validation with unknown-key
 rejection, fail-closed backend, deterministic generated project layout
-(`pyproject.toml`, `src/<package_name>/`), structured Python output model with
-a deterministic printer, `python-package` runtime reference mapping, type-only
-import erasure, and architecture scanners.
+(`pyproject.toml` with an explicit hatchling `[build-system]`,
+`src/<package_name>/`), structured Python output model with a deterministic
+printer, `python-package` runtime reference mapping, type-only import erasure,
+and architecture scanners.
+
+Slice P2 static-native spine: fact-backed functions, parameters, locals,
+returns, if/elif/else, while, for-of over proven dense lists,
+arithmetic/comparison/boolean operators (integer `/` selects `//`), string
+concat/equality, and the dense list lane (literals, index read/write,
+`.length` to `len()`, `.push` to `.append()`). Primitive lowering: proven
+integer widths to `int`, `float32`/`float64` to `float`, `bool` to `bool`,
+`string` to `str`, `void` to `None`.
+
+Naming policy: source names are preserved verbatim when they are valid Python
+identifiers (no silent PEP 8 renaming of public APIs); reserved names on
+locals mangle deterministically with a trailing underscore; reserved public
+names and post-mangling collisions fail closed.
+
+Provider packages: `createPythonProviderPackage` supplies virtual module
+declarations, selected identity mapping, Python operation rows
+(call/constructor/property/indexer with from-import or module-attribute
+rendering), and pyproject dependency rows. Provider exports without operation
+rows fail closed.
 
 Source constructs without a finalized lowering lane fail closed with
-`PYTHON_UNSUPPORTED_AST` diagnostics and zero artifacts.
+`PYTHON_UNSUPPORTED_AST`/`PYTHON_MISSING_TARGET_FACT` diagnostics and zero
+artifacts. Sparse arrays, JS array semantics (`at`, `includes`, `.length =`),
+template literals, classes, async, and error handling stay fail-closed until
+their owning slices.
 
 ## Build and test
 

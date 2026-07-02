@@ -24,6 +24,10 @@ test("empty project emits a deterministic pyproject and package files", () => {
     "src/tsonic_generated/__init__.py",
   ]);
   assert.equal(artifactText(result, "pyproject.toml"), [
+    "[build-system]",
+    'requires = ["hatchling"]',
+    'build-backend = "hatchling.build"',
+    "",
     "[project]",
     'name = "tsonic_generated"',
     'version = "0.1.0"',

@@ -37,6 +37,48 @@ export {
 } from "./print/python-printer.js";
 export { printPyprojectManifest } from "./print/pyproject-printer.js";
 export { createPythonToolchain } from "./toolchain/python-toolchain.js";
-export { createPythonTargetSemanticsExtension, pythonTargetSemanticsExtensionId } from "./source/python-target-semantics/index.js";
-export { pythonExtensionId } from "./source/python-facts/keys.js";
-export { isPythonNoneCarrier } from "./source/python-target-types.js";
+export { createPythonTargetSemanticsExtension, pythonTargetSemanticsExtensionId, recordPythonFactsBeforeFinalization } from "./source/python-target-semantics/index.js";
+export { pythonExtensionId, pythonTargetOperationFactKey } from "./source/python-facts/keys.js";
+export type {
+  PythonImportBinding,
+  PythonListOperation,
+  PythonProviderOperationForm,
+  PythonTargetOperationFact,
+} from "./source/python-facts/keys.js";
+export {
+  isPythonBoolCarrier,
+  isPythonFloatCarrier,
+  isPythonIntegerCarrier,
+  isPythonListCarrier,
+  isPythonNoneCarrier,
+  isPythonNumericCarrier,
+  isPythonStrCarrier,
+  pythonListElementCarrier,
+  pythonListTargetType,
+  pythonNoneTargetType,
+  pythonPrimitiveTypeName,
+  pythonSourcePrimitiveTargetType,
+  pythonStrTargetId,
+  pythonStrTargetType,
+  samePythonPrimitiveCarrier,
+} from "./source/python-target-types.js";
+export {
+  collectPythonProviderOperationRows,
+  createPythonProviderPackage,
+  createPythonProviderPackageBindingProvider,
+  isPythonProviderOperationContributor,
+} from "./source/provider-packages/index.js";
+export type {
+  PythonProviderDependencyDefinition,
+  PythonProviderModuleDefinition,
+  PythonProviderOperationRow,
+  PythonProviderPackageDefinition,
+  PythonProviderPackageImplementation,
+} from "./source/provider-packages/index.js";
+export { createPythonCompileInputFromSession } from "./session/compile-input.js";
+export { pythonTypeFromCarrier } from "./backend/planner/render-types.js";
+export {
+  isPythonReservedIdentifier,
+  isValidPythonIdentifier,
+  manglePythonReservedName,
+} from "./common/python-names.js";
