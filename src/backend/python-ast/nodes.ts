@@ -1,0 +1,149 @@
+// Structured Python output model. The printer is the only component that
+// turns these nodes into text; the planner never concatenates Python source.
+
+export type PythonBinaryOperator =
+  | "+"
+  | "-"
+  | "*"
+  | "/"
+  | "//"
+  | "%"
+  | "=="
+  | "!="
+  | "<"
+  | "<="
+  | ">"
+  | ">="
+  | "and"
+  | "or";
+
+export type PythonUnaryOperator = "-" | "not";
+
+export type PythonExpression =
+  | { readonly kind: "int-literal"; readonly text: string }
+  | { readonly kind: "float-literal"; readonly text: string }
+  | { readonly kind: "bool-literal"; readonly value: boolean }
+  | { readonly kind: "string-literal"; readonly value: string }
+  | { readonly kind: "none-literal" }
+  | { readonly kind: "name"; readonly name: string }
+  | { readonly kind: "attribute"; readonly value: PythonExpression; readonly name: string }
+  | { readonly kind: "call"; readonly callee: PythonExpression; readonly args: readonly PythonExpression[] }
+  | { readonly kind: "binary"; readonly operator: PythonBinaryOperator; readonly left: PythonExpression; readonly right: PythonExpression }
+  | { readonly kind: "unary"; readonly operator: PythonUnaryOperator; readonly operand: PythonExpression }
+  | { readonly kind: "subscript"; readonly value: PythonExpression; readonly index: PythonExpression }
+  | { readonly kind: "list"; readonly elements: readonly PythonExpression[] }
+  | { readonly kind: "await"; readonly operand: PythonExpression }
+  | {
+      readonly kind: "call-kwargs";
+      readonly callee: PythonExpression;
+      readonly args: readonly PythonExpression[];
+      readonly kwargs: readonly { readonly name: string; readonly value: PythonExpression }[];
+    };
+
+export type PythonTypeAnnotation =
+  | { readonly kind: "name"; readonly name: string }
+  | { readonly kind: "subscript"; readonly name: string; readonly arguments: readonly PythonTypeAnnotation[] }
+  | { readonly kind: "none" };
+
+export interface PythonParameter {
+  readonly name: string;
+  readonly annotation?: PythonTypeAnnotation;
+}
+
+export interface PythonImportedName {
+  readonly name: string;
+  readonly alias?: string;
+}
+
+export type PythonStatement =
+  | { readonly kind: "import"; readonly module: string; readonly alias?: string }
+  | { readonly kind: "from-import"; readonly module: string; readonly names: readonly PythonImportedName[] }
+  | { readonly kind: "pass" }
+  | { readonly kind: "expr"; readonly expression: PythonExpression }
+  | { readonly kind: "return"; readonly expression?: PythonExpression }
+  | {
+      readonly kind: "assign";
+      readonly targetName: string;
+      readonly annotation?: PythonTypeAnnotation;
+      readonly value: PythonExpression;
+    }
+  | {
+      readonly kind: "subscript-assign";
+      readonly target: PythonExpression;
+      readonly index: PythonExpression;
+      readonly value: PythonExpression;
+    }
+  | {
+      readonly kind: "if";
+      readonly condition: PythonExpression;
+      readonly body: readonly PythonStatement[];
+      readonly orelse?: readonly PythonStatement[];
+    }
+  | {
+      readonly kind: "while";
+      readonly condition: PythonExpression;
+      readonly body: readonly PythonStatement[];
+    }
+  | {
+      readonly kind: "for";
+      readonly targetName: string;
+      readonly iterable: PythonExpression;
+      readonly body: readonly PythonStatement[];
+    }
+  | {
+      readonly kind: "function-def";
+      readonly name: string;
+      readonly params: readonly PythonParameter[];
+      readonly returns?: PythonTypeAnnotation;
+      readonly body: readonly PythonStatement[];
+      readonly isAsync?: boolean;
+      readonly decorators?: readonly string[];
+    }
+  | {
+      readonly kind: "class-def";
+      readonly name: string;
+      readonly bases?: readonly string[];
+      readonly decorators?: readonly string[];
+      readonly body: readonly PythonStatement[];
+    }
+  | {
+      // Bare annotated class field: `name: int` (dataclass-style member).
+      readonly kind: "field-decl";
+      readonly name: string;
+      readonly annotation: PythonTypeAnnotation;
+    }
+  | {
+      readonly kind: "attribute-assign";
+      readonly target: PythonExpression;
+      readonly name: string;
+      readonly value: PythonExpression;
+    }
+  | {
+      readonly kind: "tuple-assign";
+      readonly targetNames: readonly string[];
+      readonly value: PythonExpression;
+    }
+  | { readonly kind: "raise"; readonly expression?: PythonExpression }
+  | {
+      readonly kind: "try";
+      readonly body: readonly PythonStatement[];
+      readonly handlers: readonly PythonExceptHandler[];
+      readonly finallyBody?: readonly PythonStatement[];
+    };
+
+export interface PythonExceptHandler {
+  readonly exceptionType: string;
+  readonly name?: string;
+  readonly body: readonly PythonStatement[];
+}
+
+export interface PythonModuleModel {
+  readonly headerComment: string;
+  readonly statements: readonly PythonStatement[];
+}
+
+export const pythonGeneratedHeaderComment = "Generated by the Tsonic Python target. Do not edit.";
+
+export function createPythonModule(statements: readonly PythonStatement[]): PythonModuleModel {
+  return { headerComment: pythonGeneratedHeaderComment, statements };
+}
