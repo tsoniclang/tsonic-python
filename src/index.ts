@@ -38,21 +38,31 @@ export {
 export { printPyprojectManifest } from "./print/pyproject-printer.js";
 export { createPythonToolchain } from "./toolchain/python-toolchain.js";
 export { createPythonTargetSemanticsExtension, pythonTargetSemanticsExtensionId, recordPythonFactsBeforeFinalization } from "./source/python-target-semantics/index.js";
-export { pythonExtensionId, pythonTargetOperationFactKey } from "./source/python-facts/keys.js";
+export {
+  pythonAsyncFunctionFactKey,
+  pythonExtensionId,
+  pythonSourceTypeCarrier,
+  pythonSourceTypeCarrierValue,
+  pythonTargetOperationFactKey,
+} from "./source/python-facts/keys.js";
 export type {
   PythonImportBinding,
   PythonListOperation,
   PythonProviderOperationForm,
+  PythonSourceTypeCarrierValue,
   PythonTargetOperationFact,
 } from "./source/python-facts/keys.js";
 export {
   isPythonBoolCarrier,
+  isPythonExceptionCarrier,
   isPythonFloatCarrier,
   isPythonIntegerCarrier,
   isPythonListCarrier,
   isPythonNoneCarrier,
   isPythonNumericCarrier,
   isPythonStrCarrier,
+  pythonExceptionTargetId,
+  pythonExceptionTargetType,
   pythonListElementCarrier,
   pythonListTargetType,
   pythonNoneTargetType,

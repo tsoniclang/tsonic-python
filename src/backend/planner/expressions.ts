@@ -18,6 +18,7 @@ import {
   KindStringLiteral,
   KindTrueKeyword,
   Node_Expression,
+  Node_Initializer,
   PrefixUnaryExpression_Operand,
 } from "../../common/source-ast.js";
 import { pythonTargetOperationFactKey } from "../../source/python-facts/keys.js";
@@ -39,6 +40,7 @@ import {
   pythonLocalName,
 } from "./plan-context.js";
 import type { PythonPlanContext } from "./plan-context.js";
+import { pythonSourceTypeName } from "./render-types.js";
 
 const pythonBinaryOperators: ReadonlySet<string> = new Set<PythonBinaryOperator>([
   "+", "-", "*", "/", "//", "%", "==", "!=", "<", "<=", ">", ">=", "and", "or",
@@ -120,12 +122,30 @@ export function planExpression(node: Node, context: PythonPlanContext): PythonEx
     case KindIdentifier: {
       return planIdentifier(node, context);
     }
+    case "KindThisExpression":
+    case "KindThisKeyword": {
+      if (context.selfName === undefined) {
+        context.diagnostics.push(unsupportedConstructDiagnostic(
+          diagnosticInput(context, node),
+          "python.backend.class",
+          "'this' is only supported inside class instance members.",
+        ));
+        return undefined;
+      }
+      return { kind: "name", name: context.selfName };
+    }
     case KindParenthesizedExpression: {
       const inner = Node_Expression(node);
       return inner === undefined ? undefined : planExpression(inner, context);
     }
     case KindArrayLiteralExpression: {
       return planArrayLiteral(node, context);
+    }
+    case "KindObjectLiteralExpression": {
+      return planRecordLiteral(node, context);
+    }
+    case "KindAwaitExpression": {
+      return planAwaitExpression(node, context);
     }
     case KindPrefixUnaryExpression:
     case KindPostfixUnaryExpression: {
@@ -288,7 +308,7 @@ function planBinaryExpression(node: Node, context: PythonPlanContext): PythonExp
   return undefined;
 }
 
-function planArguments(node: Node, context: PythonPlanContext): readonly PythonExpression[] | undefined {
+export function planArguments(node: Node, context: PythonPlanContext): readonly PythonExpression[] | undefined {
   const args: PythonExpression[] = [];
   for (const argument of context.input.ast.arguments(node)) {
     if (argument === undefined) {
@@ -405,6 +425,37 @@ function planCallExpression(node: Node, context: PythonPlanContext): PythonExpre
     }
     return planned;
   }
+  if (fact !== undefined && fact.kind === "source-method") {
+    if (receiverNode === undefined || !isValidPythonIdentifier(fact.name)) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, node),
+        "python.backend.class",
+        "Instance method call could not be lowered from its source-method fact.",
+      ));
+      return undefined;
+    }
+    const receiver = planExpression(receiverNode, context);
+    if (receiver === undefined) {
+      return undefined;
+    }
+    return { kind: "call", callee: { kind: "attribute", value: receiver, name: fact.name }, args };
+  }
+  if (fact !== undefined && fact.kind === "source-static-method") {
+    const className = pythonSourceTypeName(fact.typeCarrier, context);
+    if (className === undefined || !isValidPythonIdentifier(fact.name)) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, node),
+        "python.backend.class",
+        "Static method call does not resolve to a generated Python class.",
+      ));
+      return undefined;
+    }
+    return {
+      kind: "call",
+      callee: { kind: "attribute", value: { kind: "name", name: className }, name: fact.name },
+      args,
+    };
+  }
   if (fact !== undefined) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
@@ -434,6 +485,16 @@ function planCallExpression(node: Node, context: PythonPlanContext): PythonExpre
     ));
     return undefined;
   }
+  // Calls to async declarations produce coroutine objects; they lower only as
+  // the operand of a proven await expression.
+  if (ast.hasModifierKind(reference.declaration, "async") && context.awaitedCalls?.has(node) !== true) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.async",
+      "Calls to async functions are only supported as await operands.",
+    ));
+    return undefined;
+  }
   if (declarationModule !== context.moduleName) {
     collectFromImport(context, `.${declarationModule}`, declarationName);
   }
@@ -442,6 +503,19 @@ function planCallExpression(node: Node, context: PythonPlanContext): PythonExpre
 
 function planNewExpression(node: Node, context: PythonPlanContext): PythonExpression | undefined {
   const fact = pythonOperationFact(node, context);
+  if (fact !== undefined && fact.kind === "source-constructor") {
+    const className = pythonSourceTypeName(fact.resultCarrier, context);
+    if (className === undefined) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, node),
+        "python.backend.class",
+        "Constructor does not resolve to a generated Python class.",
+      ));
+      return undefined;
+    }
+    const args = planArguments(node, context);
+    return args === undefined ? undefined : { kind: "call", callee: { kind: "name", name: className }, args };
+  }
   if (fact === undefined || fact.kind !== "provider-operation" || fact.operationKind !== "constructor") {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
@@ -467,6 +541,31 @@ function planNewExpression(node: Node, context: PythonPlanContext): PythonExpres
 
 function planPropertyAccess(node: Node, context: PythonPlanContext): PythonExpression | undefined {
   const fact = pythonOperationFact(node, context);
+  if (fact !== undefined && fact.kind === "source-field") {
+    if (!isValidPythonIdentifier(fact.name)) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, node),
+        "python.backend.class",
+        `Field '${fact.name}' is not a valid Python attribute name.`,
+      ));
+      return undefined;
+    }
+    const receiverNode = Node_Expression(node);
+    const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
+    return receiver === undefined ? undefined : { kind: "attribute", value: receiver, name: fact.name };
+  }
+  if (fact !== undefined && fact.kind === "source-enum-member") {
+    const enumName = pythonSourceTypeName(fact.resultCarrier, context);
+    if (enumName === undefined || !isValidPythonIdentifier(fact.name)) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, node),
+        "python.backend.enum",
+        "Enum member access does not resolve to a generated Python enum class.",
+      ));
+      return undefined;
+    }
+    return { kind: "attribute", value: { kind: "name", name: enumName }, name: fact.name };
+  }
   if (fact !== undefined && fact.kind === "list-op" && fact.op === "len") {
     const receiverNode = Node_Expression(node);
     const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
@@ -547,4 +646,101 @@ export function planArrayLiteral(node: Node, context: PythonPlanContext): Python
     elements.push(planned);
   }
   return { kind: "list", elements };
+}
+
+// Object literals lower to keyword-argument construction of the generated
+// record class; field order comes from the finalized shape fact, and every
+// declared field must appear exactly once.
+function planRecordLiteral(node: Node, context: PythonPlanContext): PythonExpression | undefined {
+  const fact = pythonOperationFact(node, context);
+  if (fact === undefined || fact.kind !== "record-literal") {
+    context.diagnostics.push(missingFactDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.record",
+      "Object literals require a finalized record shape fact.",
+    ));
+    return undefined;
+  }
+  const className = pythonSourceTypeName(fact.resultCarrier, context);
+  if (className === undefined) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.record",
+      "Object literal shape does not resolve to a generated Python record class.",
+    ));
+    return undefined;
+  }
+  const { ast } = context.input;
+  const values = new Map<string, PythonExpression>();
+  for (const property of ast.properties(node)) {
+    if (property === undefined) {
+      continue;
+    }
+    const nameNode = ast.name(property);
+    const fieldName = nameNode === undefined ? "" : ast.text(nameNode);
+    const valueNode = ast.kindName(property) === "KindShorthandPropertyAssignment"
+      ? nameNode
+      : Node_Initializer(property);
+    if (!isValidPythonIdentifier(fieldName) || valueNode === undefined || values.has(fieldName)) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, property),
+        "python.backend.record",
+        "Object literals support only uniquely named field assignments.",
+      ));
+      return undefined;
+    }
+    const planned = planExpression(valueNode, context);
+    if (planned === undefined) {
+      return undefined;
+    }
+    values.set(fieldName, planned);
+  }
+  const kwargs: { readonly name: string; readonly value: PythonExpression }[] = [];
+  for (const fieldName of fact.fieldNames) {
+    const value = values.get(fieldName);
+    if (value === undefined) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, node),
+        "python.backend.record",
+        `Object literal does not initialize record field '${fieldName}'.`,
+      ));
+      return undefined;
+    }
+    kwargs.push({ name: fieldName, value });
+  }
+  if (values.size !== fact.fieldNames.length) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.record",
+      "Object literal fields do not match the finalized record shape.",
+    ));
+    return undefined;
+  }
+  return { kind: "call-kwargs", callee: { kind: "name", name: className }, args: [], kwargs };
+}
+
+function planAwaitExpression(node: Node, context: PythonPlanContext): PythonExpression | undefined {
+  const fact = pythonOperationFact(node, context);
+  if (fact === undefined || fact.kind !== "await-op") {
+    context.diagnostics.push(missingFactDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.async",
+      "Await expressions require a finalized await lowering fact.",
+    ));
+    return undefined;
+  }
+  if (context.insideAsync !== true) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.async",
+      "Await expressions are only supported inside async functions.",
+    ));
+    return undefined;
+  }
+  const operandNode = Node_Expression(node);
+  if (operandNode !== undefined) {
+    context.awaitedCalls?.add(operandNode);
+  }
+  const operand = operandNode === undefined ? undefined : planExpression(operandNode, context);
+  return operand === undefined ? undefined : { kind: "await", operand };
 }

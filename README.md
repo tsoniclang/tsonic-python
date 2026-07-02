@@ -55,12 +55,25 @@ declarations, selected identity mapping, Python operation rows
 rendering), and pyproject dependency rows. Provider exports without operation
 rows fail closed.
 
+Semantic closure lanes: project-source classes (annotated fields,
+constructor with `self` attribute writes, instance methods, `@staticmethod`
+statics), constant integer enums as `IntEnum` classes with fact-backed member
+access and equality, record interfaces as `@dataclass` classes with
+keyword-argument object literals, object/array destructuring to per-field
+reads, C-style `for` loops desugared to `while`, compound assignment and
+`++`/`--` through finalized operator facts, the selected error model (source
+`Error` ≙ Python `Exception`: `raise Exception(...)`,
+`except Exception as e`, `.message` as `str(e)`, `finally`), and
+`async def`/`await` gated on async lowering facts (calls to async functions
+lower only as await operands).
+
 Source constructs without a finalized lowering lane fail closed with
 `PYTHON_UNSUPPORTED_AST`/`PYTHON_MISSING_TARGET_FACT` diagnostics and zero
 artifacts. That includes sparse arrays, JS array semantics (`at`, `includes`,
-`.length =`), template literals, classes, async, error handling, and the
-`compat` typescript-compatibility mode (which requires the `python-js`
-runtime package and is rejected at option validation).
+`.length =`), template literals, class inheritance/generics/accessors,
+string enums, enum ordering comparisons, and the `compat`
+typescript-compatibility mode (which requires the `python-js` runtime
+package and is rejected at option validation).
 
 ## Build and test
 

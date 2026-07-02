@@ -5,12 +5,24 @@ import type { SourcePrimitiveKind, TargetTypeRef } from "@tsonic/tsts";
 
 export const pythonStrTargetId = "python.str";
 
+// Selected error policy: source `Error` values carry the Python Exception
+// identity; catch bindings and throw sites share this carrier.
+export const pythonExceptionTargetId = "python.Exception";
+
 export function pythonSourcePrimitiveTargetType(kind: SourcePrimitiveKind): TargetTypeRef {
   return { kind: "source-primitive", name: kind };
 }
 
 export function pythonStrTargetType(): TargetTypeRef {
   return { kind: "target-named", id: pythonStrTargetId };
+}
+
+export function pythonExceptionTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonExceptionTargetId };
+}
+
+export function isPythonExceptionCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && carrier.id === pythonExceptionTargetId;
 }
 
 export function pythonNoneTargetType(): TargetTypeRef {

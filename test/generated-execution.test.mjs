@@ -171,6 +171,111 @@ export function rem(a: int32, b: int32): int32 {
   assert.match(run.stdout, /INT-CONTRACT-OK/u);
 });
 
+test("classes, enums, records, errors, and async execute with asserted output", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import type { int32 } from "@tsonic/core/types.js";
+
+export enum Level {
+  Low = 1,
+  High = 3,
+}
+
+export interface Point {
+  x: int32;
+  y: int32;
+}
+
+export class Accumulator {
+  total: int32;
+
+  constructor(start: int32) {
+    this.total = start;
+  }
+
+  add(amount: int32): int32 {
+    this.total = this.total + amount;
+    return this.total;
+  }
+}
+
+export function build(x: int32): Point {
+  return { x, y: x * 2 };
+}
+
+export function sumFor(point: Point, level: Level): int32 {
+  const acc = new Accumulator(0);
+  const { x, y } = point;
+  for (let i: int32 = 0; i < 3; i++) {
+    acc.add(x + y + i);
+  }
+  if (level === Level.High) {
+    acc.add(100);
+  }
+  return acc.total;
+}
+
+export function guarded(flag: boolean): string {
+  try {
+    if (flag) {
+      throw new Error("expected-failure");
+    }
+    return "clean";
+  } catch (error: any) {
+    return error.message;
+  }
+}
+
+export async function slowDouble(value: int32): Promise<int32> {
+  return value + value;
+}
+
+export async function slowQuadruple(value: int32): Promise<int32> {
+  const once: int32 = await slowDouble(value);
+  return await slowDouble(once);
+}
+`,
+    },
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_closure", result.artifacts);
+
+  runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot });
+
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "import asyncio",
+    "",
+    "from tsonic_generated.index import (",
+    "    Accumulator,",
+    "    Level,",
+    "    build,",
+    "    guarded,",
+    "    slowQuadruple,",
+    "    sumFor,",
+    ")",
+    "",
+    "point = build(5)",
+    "assert (point.x, point.y) == (5, 10)",
+    "assert sumFor(point, Level.High) == 148, sumFor(point, Level.High)",
+    "assert sumFor(point, Level.Low) == 48",
+    "assert Accumulator(7).add(3) == 10",
+    'assert guarded(False) == "clean"',
+    'assert guarded(True) == "expected-failure"',
+    "assert asyncio.run(slowQuadruple(3)) == 12",
+    'print("CLOSURE-OK")',
+    "",
+  ].join("\n"));
+
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
+  assert.match(run.stdout, /CLOSURE-OK/u);
+});
+
 test("generated modules parse under the python ast module", () => {
   const { result } = compilePython({
     files: {

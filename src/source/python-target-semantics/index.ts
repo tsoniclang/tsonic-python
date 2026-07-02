@@ -22,6 +22,8 @@ import {
   BinaryExpression_Left,
   BinaryExpression_OperatorToken,
   BinaryExpression_Right,
+  CatchClause_Block,
+  CatchClause_VariableDeclaration,
   ElementAccessExpression_ArgumentExpression,
   ForInOrOfStatement_Initializer,
   ForInOrOfStatement_Statement,
@@ -48,17 +50,20 @@ import {
   KindFunctionDeclaration,
   KindIdentifier,
   KindIfStatement,
+  KindInterfaceDeclaration,
   KindNewExpression,
   KindNumericLiteral,
   KindOmittedExpression,
   KindParameter,
   KindParenthesizedExpression,
+  KindPostfixUnaryExpression,
   KindPrefixUnaryExpression,
   KindPropertyAccessExpression,
   KindReturnStatement,
   KindStringKeyword,
   KindStringLiteral,
   KindTrueKeyword,
+  KindTypeReference,
   KindVariableDeclaration,
   KindVariableStatement,
   KindVoidKeyword,
@@ -68,12 +73,20 @@ import {
   Node_Name,
   Node_Operand,
   Node_Type,
+  TryStatement_CatchClause,
+  TryStatement_FinallyBlock,
+  TryStatement_TryBlock,
+  TypeReferenceNode_TypeName,
+  getPostfixUnaryOperatorText,
   getPrefixUnaryOperatorText,
 } from "../../common/source-ast.js";
 import {
   isPythonBoolCarrier,
+  isPythonExceptionCarrier,
   isPythonIntegerCarrier,
   isPythonNumericCarrier,
+  isPythonStrCarrier,
+  pythonExceptionTargetType,
   pythonListElementCarrier,
   pythonListTargetType,
   pythonNoneTargetType,
@@ -81,7 +94,13 @@ import {
   pythonSourcePrimitiveTargetType,
   pythonStrTargetType,
 } from "../python-target-types.js";
-import { pythonExtensionId, pythonTargetOperationFactKey } from "../python-facts/keys.js";
+import {
+  pythonAsyncFunctionFactKey,
+  pythonExtensionId,
+  pythonSourceTypeCarrier,
+  pythonSourceTypeCarrierValue,
+  pythonTargetOperationFactKey,
+} from "../python-facts/keys.js";
 import type { PythonProviderOperationForm, PythonTargetOperationFact } from "../python-facts/keys.js";
 import { collectPythonProviderOperationRows } from "../provider-packages/index.js";
 import type { PythonProviderOperationRow } from "../provider-packages/index.js";
@@ -89,6 +108,7 @@ import {
   isPythonSignedNumericCarrier,
   pythonOperatorCarrierKey,
   selectPythonBinaryOperator,
+  selectPythonCompoundAssignment,
 } from "./operator-rules.js";
 import { validatePythonTargetOptions } from "../../options/python-target-options.js";
 
@@ -123,18 +143,70 @@ interface PythonFactWalk {
   readonly lifecycle: ExtensionLifecycleContext;
   readonly providerRows: readonly PythonProviderOperationRow[];
   readonly resolving: Set<object>;
+  // Proven project-source type declarations keyed by fileName::typeName. Only
+  // registered declarations own source-type lanes; everything else fails
+  // closed at every use site.
+  readonly provenSourceTypes: Map<string, Node>;
+  currentThisCarrier?: TargetTypeRef;
 }
 
 const boolCarrier = pythonSourcePrimitiveTargetType("bool");
-// List lengths surface with the int32 carrier (matches the Rust target).
+// List lengths surface with the int32 carrier (matches the shared contract).
 const listLengthCarrier = pythonSourcePrimitiveTargetType("int32");
+
+const KindClassDeclaration = "KindClassDeclaration";
+const KindEnumDeclaration = "KindEnumDeclaration";
+const KindEnumMember = "KindEnumMember";
+const KindPropertyDeclaration = "KindPropertyDeclaration";
+const KindPropertySignature = "KindPropertySignature";
+const KindMethodDeclaration = "KindMethodDeclaration";
+const KindConstructor = "KindConstructor";
+const KindSemicolonClassElement = "KindSemicolonClassElement";
+const KindObjectLiteralExpression = "KindObjectLiteralExpression";
+const KindPropertyAssignment = "KindPropertyAssignment";
+const KindShorthandPropertyAssignment = "KindShorthandPropertyAssignment";
+const KindObjectBindingPattern = "KindObjectBindingPattern";
+const KindArrayBindingPattern = "KindArrayBindingPattern";
+const KindBindingElement = "KindBindingElement";
+const KindThrowStatement = "KindThrowStatement";
+const KindTryStatement = "KindTryStatement";
+const KindAwaitExpression = "KindAwaitExpression";
+const KindThisKeyword = "KindThisKeyword";
+const KindThisExpression = "KindThisExpression";
+const KindDecorator = "KindDecorator";
 
 export function recordPythonFactsBeforeFinalization(
   lifecycle: ExtensionLifecycleContext,
   providerRows: readonly PythonProviderOperationRow[],
 ): void {
-  const walk: PythonFactWalk = { lifecycle, providerRows, resolving: new Set() };
+  const walk: PythonFactWalk = { lifecycle, providerRows, resolving: new Set(), provenSourceTypes: new Map() };
   const { ast } = lifecycle.compiler;
+  const projectStatements = (kindName: string): readonly { statement: Node; sourceFile: SourceFile }[] => {
+    const results: { statement: Node; sourceFile: SourceFile }[] = [];
+    for (const sourceFile of lifecycle.compiler.getSourceFiles()) {
+      if (sourceFile === undefined || ast.getFileName(sourceFile).endsWith(".d.ts")) {
+        continue;
+      }
+      for (const statement of ast.statements(sourceFile)) {
+        if (statement !== undefined && ast.kindName(statement) === kindName) {
+          results.push({ statement, sourceFile });
+        }
+      }
+    }
+    return results;
+  };
+  // Declaration registration runs before any body walk so use sites resolve
+  // project types regardless of file order. Enums have no member types, then
+  // interfaces (which may reference enums), then classes.
+  for (const { statement } of projectStatements(KindEnumDeclaration)) {
+    registerEnumFacts(walk, statement);
+  }
+  for (const { statement } of projectStatements(KindInterfaceDeclaration)) {
+    registerInterfaceFacts(walk, statement);
+  }
+  for (const { statement } of projectStatements(KindClassDeclaration)) {
+    registerClassFacts(walk, statement);
+  }
   for (const sourceFile of lifecycle.compiler.getSourceFiles()) {
     if (sourceFile === undefined || ast.getFileName(sourceFile).endsWith(".d.ts")) {
       continue;
@@ -148,18 +220,65 @@ export function recordPythonFactsBeforeFinalization(
         recordFunctionFacts(walk, statement, sourceFile);
       } else if (kind === KindVariableStatement) {
         recordVariableStatementFacts(walk, statement, sourceFile);
+      } else if (kind === KindClassDeclaration) {
+        recordClassFacts(walk, statement, sourceFile);
       }
     }
   }
 }
 
+// Duck-typed field access against the TS-Go AST data shapes, matching the
+// shared source-ast helpers.
+function nodeSyntaxField(node: Node | undefined, fieldName: string): Node | undefined {
+  if (node === undefined) {
+    return undefined;
+  }
+  const value = (node as unknown as Record<string, unknown>)[fieldName];
+  return typeof value === "object" && value !== null ? (value as Node) : undefined;
+}
+
+// Async declarations carry the unwrapped Promise<T> payload as their return
+// carrier; the async lowering itself is marked with the async-function fact.
+function promiseInnerCarrier(walk: PythonFactWalk, typeNode: Node | undefined): TargetTypeRef | undefined {
+  if (typeNode === undefined) {
+    return undefined;
+  }
+  const { ast, checker } = walk.lifecycle.compiler;
+  if (ast.kindName(typeNode) !== KindTypeReference) {
+    return undefined;
+  }
+  const nameNode = TypeReferenceNode_TypeName(typeNode) ?? typeNode;
+  const symbol = checker.getSymbolAtLocation(nameNode) ?? checker.getResolvedSymbolOrNil(nameNode);
+  if (symbol === undefined || checker.getSymbolName(symbol) !== "Promise") {
+    return undefined;
+  }
+  const isLibDeclaration = checker.getSymbolDeclarations(symbol).some((declaration) =>
+    declaration !== undefined && ast.getFileName(ast.getSourceFile(declaration)).endsWith(".d.ts"));
+  if (!isLibDeclaration) {
+    return undefined;
+  }
+  const [argument] = ast.typeArguments(typeNode);
+  return argument === undefined ? undefined : resolveTypeNodeCarrier(walk, argument);
+}
+
 function recordFunctionFacts(walk: PythonFactWalk, declaration: Node, sourceFile: SourceFile): void {
   const { ast } = walk.lifecycle.compiler;
-  // Async functions have no static-native Python lane; the declaration fails closed.
+  let returnCarrier: TargetTypeRef | undefined;
   if (ast.hasModifierKind(declaration, "async")) {
-    return;
+    const inner = promiseInnerCarrier(walk, Node_Type(declaration));
+    if (inner !== undefined) {
+      returnCarrier = inner;
+      walk.lifecycle.host.facts.set(declaration, pythonAsyncFunctionFactKey, { isAsync: true }, [
+        { message: "python async function" },
+      ]);
+      const typeNode = Node_Type(declaration);
+      if (typeNode !== undefined) {
+        setCarrierFact(walk, typeNode, inner);
+      }
+    }
+  } else {
+    returnCarrier = resolveTypeNodeCarrier(walk, Node_Type(declaration));
   }
-  const returnCarrier = resolveTypeNodeCarrier(walk, Node_Type(declaration));
   for (const parameter of ast.parameters(declaration)) {
     if (parameter === undefined) {
       continue;
@@ -180,6 +299,7 @@ function recordFunctionFacts(walk: PythonFactWalk, declaration: Node, sourceFile
 }
 
 function recordVariableStatementFacts(walk: PythonFactWalk, statement: Node, sourceFile: SourceFile): void {
+  const { ast } = walk.lifecycle.compiler;
   for (const declaration of collectDescendantsOfKind(walk, statement, KindVariableDeclaration)) {
     const annotated = resolveTypeNodeCarrier(walk, Node_Type(declaration));
     const initializer = Node_Initializer(declaration);
@@ -190,6 +310,92 @@ function recordVariableStatementFacts(walk: PythonFactWalk, statement: Node, sou
     if (effective !== undefined) {
       setCarrierFact(walk, declaration, effective);
     }
+    const nameNode = Node_Name(declaration);
+    const nameKind = nameNode === undefined ? "" : ast.kindName(nameNode);
+    if (nameNode !== undefined && nameKind === KindObjectBindingPattern) {
+      recordObjectDestructuringFacts(walk, nameNode, effective);
+    } else if (nameNode !== undefined && nameKind === KindArrayBindingPattern) {
+      recordArrayDestructuringFacts(walk, nameNode, effective);
+    }
+  }
+}
+
+// Destructuring encoding: each proven binding element carries its own
+// element/field carrier plus the read fact the planner replays against the
+// initializer (source-field for record/class shapes, list index-read by
+// binding position for dense lists).
+function plainBindingElements(walk: PythonFactWalk, pattern: Node): readonly { element: Node; name: string }[] | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  const bindings: { element: Node; name: string }[] = [];
+  for (const element of ast.elements(pattern)) {
+    if (element === undefined || ast.kindName(element) !== KindBindingElement) {
+      return undefined;
+    }
+    if (nodeSyntaxField(element, "DotDotDotToken") !== undefined ||
+        nodeSyntaxField(element, "PropertyName") !== undefined ||
+        Node_Initializer(element) !== undefined) {
+      return undefined;
+    }
+    const nameNode = ast.name(element);
+    if (nameNode === undefined || ast.kindName(nameNode) !== KindIdentifier) {
+      return undefined;
+    }
+    bindings.push({ element, name: ast.text(nameNode) });
+  }
+  return bindings;
+}
+
+function recordObjectDestructuringFacts(walk: PythonFactWalk, pattern: Node, valueCarrier: TargetTypeRef | undefined): void {
+  const value = pythonSourceTypeCarrierValue(valueCarrier);
+  if (value === undefined || value.shape === "enum") {
+    return;
+  }
+  const shapeDeclaration = provenSourceTypeDeclaration(walk, valueCarrier);
+  const bindings = plainBindingElements(walk, pattern);
+  if (shapeDeclaration === undefined || bindings === undefined) {
+    return;
+  }
+  // Every binding must map to a proven field before any fact lands.
+  const resolved: { element: Node; name: string; carrier: TargetTypeRef }[] = [];
+  for (const binding of bindings) {
+    const fieldCarrier = shapeFieldCarrier(walk, shapeDeclaration, binding.name);
+    if (fieldCarrier === undefined) {
+      return;
+    }
+    resolved.push({ ...binding, carrier: fieldCarrier });
+  }
+  for (const binding of resolved) {
+    const operationId = `tsonic.python.source.field:${binding.name}`;
+    recordTargetOperation(walk, binding.element, operationId, "property", binding.name);
+    setPythonOperationFact(walk, binding.element, {
+      kind: "source-field",
+      operationId,
+      name: binding.name,
+      resultCarrier: binding.carrier,
+    });
+    setCarrierFact(walk, binding.element, binding.carrier);
+  }
+}
+
+function recordArrayDestructuringFacts(walk: PythonFactWalk, pattern: Node, valueCarrier: TargetTypeRef | undefined): void {
+  const element = pythonListElementCarrier(valueCarrier);
+  if (element === undefined) {
+    return;
+  }
+  const bindings = plainBindingElements(walk, pattern);
+  if (bindings === undefined) {
+    return;
+  }
+  for (const binding of bindings) {
+    const operationId = "tsonic.python.list.index-read";
+    recordTargetOperation(walk, binding.element, operationId, "indexer", "[]");
+    setPythonOperationFact(walk, binding.element, {
+      kind: "list-op",
+      operationId,
+      op: "index-read",
+      resultCarrier: element,
+    });
+    setCarrierFact(walk, binding.element, element);
   }
 }
 
@@ -222,33 +428,34 @@ function recordStatementFacts(
   }
   if (kind === KindExpressionStatement) {
     const expression = Node_Expression(statement);
-    if (expression === undefined) {
-      return;
+    if (expression !== undefined) {
+      recordExpressionStatementFacts(walk, expression, sourceFile);
     }
-    if (ast.kindName(expression) === KindBinaryExpression) {
-      const operatorToken = BinaryExpression_OperatorToken(expression);
-      const operatorKind = operatorToken === undefined ? "" : ast.kindName(operatorToken);
-      if (operatorKind === KindEqualsToken) {
-        const left = BinaryExpression_Left(expression);
-        const right = BinaryExpression_Right(expression);
-        if (left === undefined || right === undefined) {
-          return;
-        }
-        const leftKind = ast.kindName(left);
-        if (leftKind === KindElementAccessExpression) {
-          recordListIndexWriteFacts(walk, expression, left, right, sourceFile);
-          return;
-        }
-        if (leftKind === KindPropertyAccessExpression) {
-          // Property writes (including `.length =`) have no static-native lane.
-          return;
-        }
-        const leftCarrier = resolveExpressionCarrier(walk, left, sourceFile, undefined);
-        resolveExpressionCarrier(walk, right, sourceFile, leftCarrier);
-        return;
-      }
+    return;
+  }
+  if (kind === KindThrowStatement) {
+    recordThrowFacts(walk, statement, sourceFile);
+    return;
+  }
+  if (kind === KindTryStatement) {
+    const tryBlock = TryStatement_TryBlock(statement);
+    if (tryBlock !== undefined) {
+      recordStatementFacts(walk, tryBlock, sourceFile, returnCarrier);
     }
-    resolveExpressionCarrier(walk, expression, sourceFile, undefined);
+    const catchClause = TryStatement_CatchClause(statement);
+    const catchVariable = CatchClause_VariableDeclaration(catchClause);
+    if (catchVariable !== undefined) {
+      // Selected error policy: catch bindings carry the Exception identity.
+      setCarrierFact(walk, catchVariable, pythonExceptionTargetType());
+    }
+    const catchBlock = CatchClause_Block(catchClause);
+    if (catchBlock !== undefined) {
+      recordStatementFacts(walk, catchBlock, sourceFile, returnCarrier);
+    }
+    const finallyBlock = TryStatement_FinallyBlock(statement);
+    if (finallyBlock !== undefined) {
+      recordStatementFacts(walk, finallyBlock, sourceFile, returnCarrier);
+    }
     return;
   }
   if (kind === KindIfStatement) {
@@ -302,13 +509,68 @@ function recordStatementFacts(
     }
     const incrementor = ForStatement_Incrementor(statement);
     if (incrementor !== undefined) {
-      resolveExpressionCarrier(walk, incrementor, sourceFile, undefined);
+      // Incrementors take the expression-statement lanes: update operators
+      // and compound assignments record facts here too.
+      recordExpressionStatementFacts(walk, incrementor, sourceFile);
     }
     const body = IterationStatement_Statement(statement);
     if (body !== undefined) {
       recordStatementFacts(walk, body, sourceFile, returnCarrier);
     }
     return;
+  }
+}
+
+function recordExpressionStatementFacts(walk: PythonFactWalk, expression: Node, sourceFile: SourceFile): void {
+  const { ast } = walk.lifecycle.compiler;
+  if (ast.kindName(expression) === KindBinaryExpression) {
+    const operatorToken = BinaryExpression_OperatorToken(expression);
+    const operatorKind = operatorToken === undefined ? "" : ast.kindName(operatorToken);
+    const left = BinaryExpression_Left(expression);
+    const right = BinaryExpression_Right(expression);
+    if (operatorKind === KindEqualsToken) {
+      if (left === undefined || right === undefined) {
+        return;
+      }
+      const leftKind = ast.kindName(left);
+      if (leftKind === KindElementAccessExpression) {
+        recordListIndexWriteFacts(walk, expression, left, right, sourceFile);
+        return;
+      }
+      if (leftKind === KindPropertyAccessExpression) {
+        recordThisFieldWriteFacts(walk, left, right, sourceFile);
+        return;
+      }
+      const leftCarrier = resolveExpressionCarrier(walk, left, sourceFile, undefined);
+      resolveExpressionCarrier(walk, right, sourceFile, leftCarrier);
+      return;
+    }
+    if (left !== undefined && right !== undefined && ast.kindName(left) === KindIdentifier) {
+      const leftCarrier = resolveExpressionCarrier(walk, left, sourceFile, undefined);
+      const rightCarrier = resolveExpressionCarrier(walk, right, sourceFile, leftCarrier);
+      const compound = selectPythonCompoundAssignment(operatorKind, leftCarrier, rightCarrier);
+      if (compound !== undefined && leftCarrier !== undefined) {
+        recordOperatorFacts(walk, expression, compound, leftCarrier, pythonOperatorCarrierKey(leftCarrier));
+        return;
+      }
+    }
+  }
+  resolveExpressionCarrier(walk, expression, sourceFile, undefined);
+}
+
+// Field writes participate only on `this` receivers inside proven class
+// bodies; other property writes (including `.length =`) have no
+// static-native lane.
+function recordThisFieldWriteFacts(walk: PythonFactWalk, left: Node, right: Node, sourceFile: SourceFile): void {
+  const { ast } = walk.lifecycle.compiler;
+  const receiver = Node_Expression(left);
+  const receiverKind = receiver === undefined ? "" : ast.kindName(receiver);
+  if ((receiverKind !== KindThisKeyword && receiverKind !== KindThisExpression) || walk.currentThisCarrier === undefined) {
+    return;
+  }
+  const leftCarrier = resolveExpressionCarrier(walk, left, sourceFile, undefined);
+  if (leftCarrier !== undefined) {
+    resolveExpressionCarrier(walk, right, sourceFile, leftCarrier);
   }
 }
 
@@ -331,6 +593,12 @@ function resolveTypeNodeCarrier(walk: PythonFactWalk, typeNode: Node | undefined
     return setCarrierFact(walk, typeNode, pythonSourcePrimitiveTargetType(primitive.kind));
   }
   const kind = walk.lifecycle.compiler.ast.kindName(typeNode);
+  if (kind === KindTypeReference) {
+    const sourceType = sourceTypeCarrierForReference(walk, typeNode);
+    if (sourceType !== undefined) {
+      return setCarrierFact(walk, typeNode, sourceType);
+    }
+  }
   if (kind === KindArrayType) {
     const element = resolveTypeNodeCarrier(walk, ArrayTypeNode_ElementType(typeNode));
     return element === undefined ? undefined : setCarrierFact(walk, typeNode, pythonListTargetType(element));
@@ -396,8 +664,19 @@ function resolveExpressionCarrierUncached(
     case KindIdentifier: {
       return resolveIdentifierCarrier(walk, expression, sourceFile);
     }
+    case KindThisKeyword:
+    case KindThisExpression: {
+      const thisCarrier = walk.currentThisCarrier;
+      return thisCarrier === undefined ? undefined : setCarrierFact(walk, expression, thisCarrier);
+    }
     case KindArrayLiteralExpression: {
       return resolveArrayLiteralCarrier(walk, expression, sourceFile, expected);
+    }
+    case KindObjectLiteralExpression: {
+      return resolveRecordLiteralCarrier(walk, expression, sourceFile, expected);
+    }
+    case KindAwaitExpression: {
+      return resolveAwaitCarrier(walk, expression, sourceFile);
     }
     case KindParenthesizedExpression: {
       const inner = Node_Expression(expression);
@@ -406,8 +685,9 @@ function resolveExpressionCarrierUncached(
         : resolveExpressionCarrier(walk, inner, sourceFile, expected);
       return carrier === undefined ? undefined : setCarrierFact(walk, expression, carrier);
     }
-    case KindPrefixUnaryExpression: {
-      return resolveUnaryCarrier(walk, expression, sourceFile, expected);
+    case KindPrefixUnaryExpression:
+    case KindPostfixUnaryExpression: {
+      return resolveUnaryCarrier(walk, expression, sourceFile, expected, kind);
     }
     case KindBinaryExpression: {
       return resolveBinaryCarrier(walk, expression, sourceFile, expected);
@@ -449,7 +729,8 @@ function resolveIdentifierCarrier(walk: PythonFactWalk, identifier: Node, source
     return undefined;
   }
   const declarationKind = walk.lifecycle.compiler.ast.kindName(declaration);
-  if (declarationKind !== KindParameter && declarationKind !== KindVariableDeclaration) {
+  if (declarationKind !== KindParameter && declarationKind !== KindVariableDeclaration &&
+      declarationKind !== KindBindingElement) {
     return undefined;
   }
   const facts = walk.lifecycle.host.facts;
@@ -478,14 +759,17 @@ function resolveUnaryCarrier(
   expression: Node,
   sourceFile: SourceFile,
   expected: TargetTypeRef | undefined,
+  expressionKind: string,
 ): TargetTypeRef | undefined {
   const operand = Node_Operand(expression);
   if (operand === undefined) {
     return undefined;
   }
   const ast = walk.lifecycle.compiler.ast;
-  const operatorText = getPrefixUnaryOperatorText(ast, expression);
-  if (operatorText === "!") {
+  const operatorText = expressionKind === KindPrefixUnaryExpression
+    ? getPrefixUnaryOperatorText(ast, expression)
+    : getPostfixUnaryOperatorText(ast, expression);
+  if (operatorText === "!" && expressionKind === KindPrefixUnaryExpression) {
     const operandCarrier = resolveExpressionCarrier(walk, operand, sourceFile, boolCarrier);
     if (operandCarrier !== undefined && isPythonBoolCarrier(operandCarrier)) {
       recordOperatorFacts(walk, expression, "not", boolCarrier, pythonOperatorCarrierKey(boolCarrier));
@@ -493,10 +777,22 @@ function resolveUnaryCarrier(
     }
     return undefined;
   }
-  if (operatorText === "-") {
+  if (operatorText === "-" && expressionKind === KindPrefixUnaryExpression) {
     const operandCarrier = resolveExpressionCarrier(walk, operand, sourceFile, expected);
     if (operandCarrier !== undefined && isPythonSignedNumericCarrier(operandCarrier)) {
       recordOperatorFacts(walk, expression, "-", operandCarrier, pythonOperatorCarrierKey(operandCarrier));
+      return setCarrierFact(walk, expression, operandCarrier);
+    }
+    return undefined;
+  }
+  if (operatorText === "++" || operatorText === "--") {
+    if (ast.kindName(operand) !== KindIdentifier) {
+      return undefined;
+    }
+    const operandCarrier = resolveExpressionCarrier(walk, operand, sourceFile, undefined);
+    if (operandCarrier !== undefined && isPythonNumericCarrier(operandCarrier)) {
+      const operator = operatorText === "++" ? "+=" : "-=";
+      recordOperatorFacts(walk, expression, operator, operandCarrier, pythonOperatorCarrierKey(operandCarrier));
       return setCarrierFact(walk, expression, operandCarrier);
     }
     return undefined;
@@ -596,6 +892,10 @@ function resolveCallLikeCarrier(
     }
     recordProviderOperationFacts(walk, expression, row, providerIdentity);
     return setCarrierFact(walk, expression, row.resultCarrier);
+  }
+  const sourceCallLike = trySourceCallLike(walk, expression, callee, callArguments, sourceFile, expressionKind);
+  if (sourceCallLike !== undefined) {
+    return sourceCallLike;
   }
   if (expressionKind === KindNewExpression) {
     return undefined;
@@ -716,7 +1016,24 @@ function resolvePropertyAccessCarrier(
       return setCarrierFact(walk, expression, listLengthCarrier);
     }
   }
-  return undefined;
+  if (isPythonExceptionCarrier(receiverCarrier)) {
+    const nameNode = Node_Name(expression);
+    if (nameNode !== undefined && walk.lifecycle.compiler.ast.text(nameNode) === "message") {
+      // Selected error policy: `.message` reads lower to str(error).
+      const operationId = "tsonic.python.error.message";
+      recordTargetOperation(walk, expression, operationId, "property", "str");
+      setPythonOperationFact(walk, expression, {
+        kind: "provider-operation",
+        operationId,
+        operationKind: "property",
+        target: { form: "builtin-call", name: "str" },
+        resultCarrier: pythonStrTargetType(),
+      });
+      return setCarrierFact(walk, expression, pythonStrTargetType());
+    }
+    return undefined;
+  }
+  return trySourceMemberAccess(walk, expression);
 }
 
 function resolveElementAccessCarrier(
@@ -876,6 +1193,668 @@ function resolveArrayLiteralCarrier(
     length: elements.length,
   });
   return setCarrierFact(walk, expression, resultCarrier);
+}
+
+// --- Project-source types: classes, enums, records ---------------------------
+
+function sourceTypeKey(fileName: string, typeName: string): string {
+  return `${fileName}::${typeName}`;
+}
+
+function projectDeclarationFor(walk: PythonFactWalk, reference: Node): Node | undefined {
+  const { ast, checker } = walk.lifecycle.compiler;
+  const symbol = checker.getResolvedSymbolOrNil(reference) ?? checker.getSymbolAtLocation(reference);
+  if (symbol === undefined) {
+    return undefined;
+  }
+  const aliased = safeAliasedSymbol(checker, symbol) ?? symbol;
+  const declaration = checker.getSymbolValueDeclaration(aliased) ??
+    checker.getSymbolValueDeclaration(symbol) ??
+    checker.getPrimarySymbolDeclaration(aliased) ??
+    checker.getPrimarySymbolDeclaration(symbol) ??
+    checker.getSymbolDeclarations(symbol)[0];
+  if (declaration === undefined) {
+    return undefined;
+  }
+  const fileName = ast.getFileName(ast.getSourceFile(declaration));
+  return fileName.endsWith(".d.ts") ? undefined : declaration;
+}
+
+function sourceTypeCarrierForDeclaration(walk: PythonFactWalk, declaration: Node): TargetTypeRef | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  const kind = ast.kindName(declaration);
+  const shape = kind === KindClassDeclaration
+    ? "class"
+    : kind === KindEnumDeclaration
+      ? "enum"
+      : kind === KindInterfaceDeclaration
+        ? "record"
+        : undefined;
+  if (shape === undefined) {
+    return undefined;
+  }
+  const nameNode = ast.name(declaration);
+  const typeName = nameNode === undefined ? "" : ast.text(nameNode);
+  if (typeName.length === 0) {
+    return undefined;
+  }
+  const fileName = ast.getFileName(ast.getSourceFile(declaration));
+  return pythonSourceTypeCarrier(fileName, typeName, shape);
+}
+
+function isProvenSourceTypeDeclaration(walk: PythonFactWalk, declaration: Node): boolean {
+  const carrier = sourceTypeCarrierForDeclaration(walk, declaration);
+  const value = pythonSourceTypeCarrierValue(carrier);
+  return value !== undefined && walk.provenSourceTypes.get(sourceTypeKey(value.fileName, value.typeName)) === declaration;
+}
+
+function provenSourceTypeDeclaration(walk: PythonFactWalk, carrier: TargetTypeRef | undefined): Node | undefined {
+  const value = pythonSourceTypeCarrierValue(carrier);
+  return value === undefined ? undefined : walk.provenSourceTypes.get(sourceTypeKey(value.fileName, value.typeName));
+}
+
+function sourceTypeCarrierForReference(walk: PythonFactWalk, typeNode: Node): TargetTypeRef | undefined {
+  const nameNode = TypeReferenceNode_TypeName(typeNode) ?? walk.lifecycle.compiler.ast.name(typeNode) ?? typeNode;
+  const declaration = projectDeclarationFor(walk, nameNode);
+  if (declaration === undefined || !isProvenSourceTypeDeclaration(walk, declaration)) {
+    return undefined;
+  }
+  return sourceTypeCarrierForDeclaration(walk, declaration);
+}
+
+function shapeFieldCarrier(walk: PythonFactWalk, shapeDeclaration: Node, fieldName: string): TargetTypeRef | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  for (const member of ast.members(shapeDeclaration)) {
+    if (member === undefined) {
+      continue;
+    }
+    const memberKind = ast.kindName(member);
+    if (memberKind !== KindPropertyDeclaration && memberKind !== KindPropertySignature) {
+      continue;
+    }
+    const nameNode = ast.name(member);
+    if (nameNode === undefined || ast.text(nameNode) !== fieldName) {
+      continue;
+    }
+    return walk.lifecycle.host.facts.get(member, runtimeCarrierFactKey)?.carrier ??
+      resolveTypeNodeCarrier(walk, Node_Type(member));
+  }
+  return undefined;
+}
+
+function safeConstantValue(
+  checker: PythonFactWalk["lifecycle"]["compiler"]["checker"],
+  node: Node,
+): unknown {
+  try {
+    return checker.getConstantValue(node);
+  } catch {
+    return undefined;
+  }
+}
+
+// Numeric-constant enums only; string or computed members leave the whole
+// declaration unproven.
+function registerEnumFacts(walk: PythonFactWalk, declaration: Node): void {
+  const { ast, checker } = walk.lifecycle.compiler;
+  const carrier = sourceTypeCarrierForDeclaration(walk, declaration);
+  const value = pythonSourceTypeCarrierValue(carrier);
+  if (carrier === undefined || value === undefined) {
+    return;
+  }
+  for (const member of ast.members(declaration)) {
+    if (member === undefined || ast.kindName(member) !== KindEnumMember) {
+      return;
+    }
+    const nameNode = ast.name(member);
+    if (nameNode === undefined || ast.kindName(nameNode) !== KindIdentifier) {
+      return;
+    }
+    const constant = safeConstantValue(checker, member);
+    if (typeof constant !== "number" || !Number.isSafeInteger(constant)) {
+      return;
+    }
+  }
+  setCarrierFact(walk, declaration, carrier);
+  walk.provenSourceTypes.set(sourceTypeKey(value.fileName, value.typeName), declaration);
+}
+
+// Record shapes: interfaces whose members are all plain, required property
+// signatures with proven carriers.
+function registerInterfaceFacts(walk: PythonFactWalk, declaration: Node): void {
+  const { ast } = walk.lifecycle.compiler;
+  const carrier = sourceTypeCarrierForDeclaration(walk, declaration);
+  const value = pythonSourceTypeCarrierValue(carrier);
+  if (carrier === undefined || value === undefined) {
+    return;
+  }
+  if (ast.typeParameters(declaration).some((parameter) => parameter !== undefined) ||
+      ast.extendsHeritageElements(declaration).some((clause) => clause !== undefined)) {
+    return;
+  }
+  const fields: { member: Node; carrier: TargetTypeRef }[] = [];
+  for (const member of ast.members(declaration)) {
+    if (member === undefined || ast.kindName(member) !== KindPropertySignature) {
+      return;
+    }
+    if (nodeSyntaxField(member, "PostfixToken") !== undefined) {
+      return;
+    }
+    const nameNode = ast.name(member);
+    if (nameNode === undefined || ast.kindName(nameNode) !== KindIdentifier) {
+      return;
+    }
+    const fieldCarrier = resolveTypeNodeCarrier(walk, Node_Type(member));
+    if (fieldCarrier === undefined) {
+      return;
+    }
+    fields.push({ member, carrier: fieldCarrier });
+  }
+  setCarrierFact(walk, declaration, carrier);
+  for (const field of fields) {
+    setCarrierFact(walk, field.member, field.carrier);
+  }
+  walk.provenSourceTypes.set(sourceTypeKey(value.fileName, value.typeName), declaration);
+}
+
+function parameterIsProven(walk: PythonFactWalk, parameter: Node): boolean {
+  const { ast } = walk.lifecycle.compiler;
+  // Parameter properties, decorators, rest/optional/defaulted parameters
+  // leave the declaration unproven.
+  if (ast.modifiers(parameter).some((modifier) => modifier !== undefined)) {
+    return false;
+  }
+  if (nodeSyntaxField(parameter, "DotDotDotToken") !== undefined ||
+      nodeSyntaxField(parameter, "QuestionToken") !== undefined ||
+      Node_Initializer(parameter) !== undefined) {
+    return false;
+  }
+  const nameNode = ast.name(parameter);
+  if (nameNode === undefined || ast.kindName(nameNode) !== KindIdentifier) {
+    return false;
+  }
+  return resolveTypeNodeCarrier(walk, Node_Type(parameter)) !== undefined;
+}
+
+function classDeclarationIsProven(walk: PythonFactWalk, declaration: Node): boolean {
+  const { ast } = walk.lifecycle.compiler;
+  if (ast.typeParameters(declaration).some((parameter) => parameter !== undefined) ||
+      ast.extendsHeritageElements(declaration).some((clause) => clause !== undefined) ||
+      ast.implementsHeritageElements(declaration).some((clause) => clause !== undefined) ||
+      ast.hasModifierKind(declaration, "abstract") ||
+      ast.modifiers(declaration).some((modifier) => modifier !== undefined && ast.kindName(modifier) === KindDecorator)) {
+    return false;
+  }
+  let constructorCount = 0;
+  for (const member of ast.members(declaration)) {
+    if (member === undefined) {
+      return false;
+    }
+    const memberKind = ast.kindName(member);
+    if (memberKind === KindSemicolonClassElement) {
+      continue;
+    }
+    if (ast.modifiers(member).some((modifier) => modifier !== undefined && ast.kindName(modifier) === KindDecorator)) {
+      return false;
+    }
+    if (memberKind === KindPropertyDeclaration) {
+      // Minimum field lane: annotated instance fields assigned in the
+      // constructor body; declaration-site initializers stay unproven.
+      if (ast.hasModifierKind(member, "static") ||
+          nodeSyntaxField(member, "PostfixToken") !== undefined ||
+          Node_Initializer(member) !== undefined) {
+        return false;
+      }
+      const nameNode = ast.name(member);
+      if (nameNode === undefined || ast.kindName(nameNode) !== KindIdentifier) {
+        return false;
+      }
+      if (resolveTypeNodeCarrier(walk, Node_Type(member)) === undefined) {
+        return false;
+      }
+      continue;
+    }
+    if (memberKind === KindConstructor || memberKind === KindMethodDeclaration) {
+      if (memberKind === KindConstructor) {
+        constructorCount += 1;
+        if (constructorCount > 1) {
+          return false;
+        }
+      }
+      if (ast.body(member) === undefined) {
+        return false;
+      }
+      if (memberKind === KindMethodDeclaration) {
+        if (ast.typeParameters(member).some((parameter) => parameter !== undefined) ||
+            nodeSyntaxField(member, "PostfixToken") !== undefined) {
+          return false;
+        }
+        const nameNode = ast.name(member);
+        if (nameNode === undefined || ast.kindName(nameNode) !== KindIdentifier) {
+          return false;
+        }
+        const methodReturnCarrier = ast.hasModifierKind(member, "async")
+          ? promiseInnerCarrier(walk, Node_Type(member))
+          : resolveTypeNodeCarrier(walk, Node_Type(member));
+        if (methodReturnCarrier === undefined) {
+          return false;
+        }
+      }
+      for (const parameter of ast.parameters(member)) {
+        if (parameter === undefined || !parameterIsProven(walk, parameter)) {
+          return false;
+        }
+      }
+      continue;
+    }
+    // Getters/setters, index signatures, static blocks and every other
+    // member shape leave the whole class unproven.
+    return false;
+  }
+  return true;
+}
+
+function registerClassFacts(walk: PythonFactWalk, declaration: Node): void {
+  const carrier = sourceTypeCarrierForDeclaration(walk, declaration);
+  const value = pythonSourceTypeCarrierValue(carrier);
+  if (carrier === undefined || value === undefined) {
+    return;
+  }
+  const key = sourceTypeKey(value.fileName, value.typeName);
+  if (walk.provenSourceTypes.has(key)) {
+    return;
+  }
+  // Provisional registration lets member signatures reference the class
+  // itself; a failed proof removes it before any use-site lane opens.
+  walk.provenSourceTypes.set(key, declaration);
+  if (!classDeclarationIsProven(walk, declaration)) {
+    walk.provenSourceTypes.delete(key);
+    return;
+  }
+  setCarrierFact(walk, declaration, carrier);
+}
+
+function recordClassFacts(walk: PythonFactWalk, declaration: Node, sourceFile: SourceFile): void {
+  const { ast } = walk.lifecycle.compiler;
+  const carrier = sourceTypeCarrierForDeclaration(walk, declaration);
+  if (carrier === undefined || provenSourceTypeDeclaration(walk, carrier) !== declaration) {
+    return;
+  }
+  const previousThis = walk.currentThisCarrier;
+  walk.currentThisCarrier = carrier;
+  for (const member of ast.members(declaration)) {
+    if (member === undefined) {
+      continue;
+    }
+    const memberKind = ast.kindName(member);
+    if (memberKind === KindPropertyDeclaration) {
+      const fieldCarrier = resolveTypeNodeCarrier(walk, Node_Type(member));
+      if (fieldCarrier !== undefined) {
+        setCarrierFact(walk, member, fieldCarrier);
+      }
+      continue;
+    }
+    if (memberKind === KindConstructor || memberKind === KindMethodDeclaration) {
+      for (const parameter of ast.parameters(member)) {
+        if (parameter === undefined) {
+          continue;
+        }
+        const parameterCarrier = resolveTypeNodeCarrier(walk, Node_Type(parameter));
+        if (parameterCarrier !== undefined) {
+          setCarrierFact(walk, parameter, parameterCarrier);
+        }
+      }
+      let returnCarrier: TargetTypeRef | undefined;
+      if (memberKind === KindMethodDeclaration) {
+        if (ast.hasModifierKind(member, "async")) {
+          const inner = promiseInnerCarrier(walk, Node_Type(member));
+          if (inner !== undefined) {
+            returnCarrier = inner;
+            walk.lifecycle.host.facts.set(member, pythonAsyncFunctionFactKey, { isAsync: true }, [
+              { message: "python async method" },
+            ]);
+            const typeNode = Node_Type(member);
+            if (typeNode !== undefined) {
+              setCarrierFact(walk, typeNode, inner);
+            }
+          }
+        } else {
+          returnCarrier = resolveTypeNodeCarrier(walk, Node_Type(member));
+        }
+      }
+      const body = ast.body(member);
+      if (body !== undefined) {
+        for (const statement of ast.statements(body)) {
+          if (statement !== undefined) {
+            recordStatementFacts(walk, statement, sourceFile, returnCarrier);
+          }
+        }
+      }
+    }
+  }
+  walk.currentThisCarrier = previousThis;
+}
+
+// Contextually-typed object literals against a proven record shape. Field
+// order in the fact follows the shape declaration; the literal must assign
+// every field exactly once with a matching carrier.
+function resolveRecordLiteralCarrier(
+  walk: PythonFactWalk,
+  expression: Node,
+  sourceFile: SourceFile,
+  expected: TargetTypeRef | undefined,
+): TargetTypeRef | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  const value = pythonSourceTypeCarrierValue(expected);
+  if (expected === undefined || value === undefined || value.shape !== "record") {
+    return undefined;
+  }
+  const shapeDeclaration = provenSourceTypeDeclaration(walk, expected);
+  if (shapeDeclaration === undefined) {
+    return undefined;
+  }
+  const shapeFields: { name: string; carrier: TargetTypeRef }[] = [];
+  for (const member of ast.members(shapeDeclaration)) {
+    if (member === undefined) {
+      return undefined;
+    }
+    const nameNode = ast.name(member);
+    const fieldName = nameNode === undefined ? "" : ast.text(nameNode);
+    const fieldCarrier = walk.lifecycle.host.facts.get(member, runtimeCarrierFactKey)?.carrier ??
+      resolveTypeNodeCarrier(walk, Node_Type(member));
+    if (fieldName.length === 0 || fieldCarrier === undefined) {
+      return undefined;
+    }
+    shapeFields.push({ name: fieldName, carrier: fieldCarrier });
+  }
+  const initializers = new Map<string, Node>();
+  for (const property of ast.properties(expression)) {
+    if (property === undefined) {
+      return undefined;
+    }
+    const propertyKind = ast.kindName(property);
+    if (propertyKind !== KindPropertyAssignment && propertyKind !== KindShorthandPropertyAssignment) {
+      return undefined;
+    }
+    const nameNode = ast.name(property);
+    const fieldName = nameNode === undefined ? "" : ast.text(nameNode);
+    // Shorthand assignments read the value from the name binding itself.
+    const initializer = propertyKind === KindShorthandPropertyAssignment ? nameNode : Node_Initializer(property);
+    if (fieldName.length === 0 || initializer === undefined || initializers.has(fieldName)) {
+      return undefined;
+    }
+    initializers.set(fieldName, initializer);
+  }
+  if (initializers.size !== shapeFields.length || shapeFields.some((field) => !initializers.has(field.name))) {
+    return undefined;
+  }
+  for (const field of shapeFields) {
+    const initializer = initializers.get(field.name);
+    const fieldValueCarrier = initializer === undefined
+      ? undefined
+      : resolveExpressionCarrier(walk, initializer, sourceFile, field.carrier);
+    if (fieldValueCarrier === undefined || !sameCarrier(fieldValueCarrier, field.carrier)) {
+      return undefined;
+    }
+  }
+  setPythonOperationFact(walk, expression, {
+    kind: "record-literal",
+    operationId: "tsonic.python.record.literal",
+    resultCarrier: expected,
+    fieldNames: shapeFields.map((field) => field.name),
+  });
+  return setCarrierFact(walk, expression, expected);
+}
+
+function trySourceMemberAccess(walk: PythonFactWalk, expression: Node): TargetTypeRef | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  const memberDeclaration = projectDeclarationFor(walk, expression);
+  if (memberDeclaration === undefined) {
+    return undefined;
+  }
+  const memberKind = ast.kindName(memberDeclaration);
+  if (memberKind === KindPropertyDeclaration || memberKind === KindPropertySignature) {
+    const owner = ast.parent(memberDeclaration);
+    if (owner === undefined || !isProvenSourceTypeDeclaration(walk, owner)) {
+      return undefined;
+    }
+    const fieldCarrier = walk.lifecycle.host.facts.get(memberDeclaration, runtimeCarrierFactKey)?.carrier ??
+      resolveTypeNodeCarrier(walk, Node_Type(memberDeclaration));
+    const nameNode = ast.name(memberDeclaration);
+    const fieldName = nameNode === undefined ? "" : ast.text(nameNode);
+    if (fieldCarrier === undefined || fieldName.length === 0) {
+      return undefined;
+    }
+    const operationId = `tsonic.python.source.field:${fieldName}`;
+    recordTargetOperation(walk, expression, operationId, "property", fieldName);
+    setPythonOperationFact(walk, expression, {
+      kind: "source-field",
+      operationId,
+      name: fieldName,
+      resultCarrier: fieldCarrier,
+    });
+    return setCarrierFact(walk, expression, fieldCarrier);
+  }
+  if (memberKind === KindEnumMember) {
+    const enumDeclaration = ast.parent(memberDeclaration);
+    if (enumDeclaration === undefined || !isProvenSourceTypeDeclaration(walk, enumDeclaration)) {
+      return undefined;
+    }
+    const enumCarrier = sourceTypeCarrierForDeclaration(walk, enumDeclaration);
+    const nameNode = ast.name(memberDeclaration);
+    const memberName = nameNode === undefined ? "" : ast.text(nameNode);
+    if (enumCarrier === undefined || memberName.length === 0) {
+      return undefined;
+    }
+    const operationId = `tsonic.python.source.enum-member:${memberName}`;
+    recordTargetOperation(walk, expression, operationId, "property", memberName);
+    setPythonOperationFact(walk, expression, {
+      kind: "source-enum-member",
+      operationId,
+      name: memberName,
+      resultCarrier: enumCarrier,
+    });
+    return setCarrierFact(walk, expression, enumCarrier);
+  }
+  return undefined;
+}
+
+function trySourceCallLike(
+  walk: PythonFactWalk,
+  expression: Node,
+  callee: Node,
+  callArguments: readonly (Node | undefined)[],
+  sourceFile: SourceFile,
+  expressionKind: string,
+): TargetTypeRef | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  const resolveArguments = (parameters: readonly (Node | undefined)[]): void => {
+    for (const [index, argument] of callArguments.entries()) {
+      if (argument === undefined) {
+        continue;
+      }
+      const parameter = parameters[index];
+      const expected = parameter === undefined
+        ? undefined
+        : walk.lifecycle.host.facts.get(parameter, runtimeCarrierFactKey)?.carrier ??
+          resolveTypeNodeCarrier(walk, Node_Type(parameter));
+      resolveExpressionCarrier(walk, argument, sourceFile, expected);
+    }
+  };
+  if (expressionKind === KindNewExpression) {
+    const classDeclaration = projectDeclarationFor(walk, callee);
+    if (classDeclaration === undefined || ast.kindName(classDeclaration) !== KindClassDeclaration ||
+        !isProvenSourceTypeDeclaration(walk, classDeclaration)) {
+      return undefined;
+    }
+    const classCarrier = sourceTypeCarrierForDeclaration(walk, classDeclaration);
+    if (classCarrier === undefined) {
+      return undefined;
+    }
+    const constructorMember = ast.members(classDeclaration).find((member) =>
+      member !== undefined && ast.kindName(member) === KindConstructor);
+    resolveArguments(constructorMember === undefined ? [] : ast.parameters(constructorMember));
+    const operationId = "tsonic.python.source.constructor";
+    recordTargetOperation(walk, expression, operationId, "constructor", "__init__");
+    setPythonOperationFact(walk, expression, {
+      kind: "source-constructor",
+      operationId,
+      resultCarrier: classCarrier,
+    });
+    return setCarrierFact(walk, expression, classCarrier);
+  }
+  if (ast.kindName(callee) !== KindPropertyAccessExpression) {
+    return undefined;
+  }
+  const methodDeclaration = projectDeclarationFor(walk, callee);
+  if (methodDeclaration === undefined || ast.kindName(methodDeclaration) !== KindMethodDeclaration) {
+    return undefined;
+  }
+  const classDeclaration = ast.parent(methodDeclaration);
+  if (classDeclaration === undefined || !isProvenSourceTypeDeclaration(walk, classDeclaration)) {
+    return undefined;
+  }
+  const isStaticMethod = ast.hasModifierKind(methodDeclaration, "static");
+  const receiver = Node_Expression(callee);
+  if (receiver !== undefined && !isStaticMethod) {
+    resolveExpressionCarrier(walk, receiver, sourceFile, undefined);
+  }
+  resolveArguments(ast.parameters(methodDeclaration));
+  const returnCarrier = resolveTypeNodeCarrier(walk, Node_Type(methodDeclaration));
+  const nameNode = ast.name(methodDeclaration);
+  const methodName = nameNode === undefined ? "" : ast.text(nameNode);
+  if (returnCarrier === undefined || methodName.length === 0) {
+    return undefined;
+  }
+  if (isStaticMethod) {
+    const typeCarrier = sourceTypeCarrierForDeclaration(walk, classDeclaration);
+    if (typeCarrier === undefined) {
+      return undefined;
+    }
+    const operationId = `tsonic.python.source.static-method:${methodName}`;
+    recordTargetOperation(walk, expression, operationId, "method", methodName);
+    setPythonOperationFact(walk, expression, {
+      kind: "source-static-method",
+      operationId,
+      name: methodName,
+      typeCarrier,
+      resultCarrier: returnCarrier,
+    });
+    return setCarrierFact(walk, expression, returnCarrier);
+  }
+  const operationId = `tsonic.python.source.method:${methodName}`;
+  recordTargetOperation(walk, expression, operationId, "method", methodName);
+  setPythonOperationFact(walk, expression, {
+    kind: "source-method",
+    operationId,
+    name: methodName,
+    resultCarrier: returnCarrier,
+  });
+  return setCarrierFact(walk, expression, returnCarrier);
+}
+
+// --- Error model --------------------------------------------------------------
+
+// `throw new Error(message)` with a proven str message and rethrows of
+// Exception-carrying bindings record throw facts; anything else records
+// nothing.
+function recordThrowFacts(walk: PythonFactWalk, statement: Node, sourceFile: SourceFile): void {
+  const { ast, checker } = walk.lifecycle.compiler;
+  const expression = Node_Expression(statement);
+  if (expression === undefined) {
+    return;
+  }
+  const kind = ast.kindName(expression);
+  if (kind === KindIdentifier) {
+    const carrier = resolveExpressionCarrier(walk, expression, sourceFile, undefined);
+    if (isPythonExceptionCarrier(carrier)) {
+      setPythonOperationFact(walk, statement, { kind: "throw-op", operationId: "tsonic.python.error.rethrow" });
+    }
+    return;
+  }
+  if (kind !== KindNewExpression) {
+    return;
+  }
+  const callee = Node_Expression(expression);
+  const symbol = callee === undefined
+    ? undefined
+    : checker.getResolvedSymbolOrNil(callee) ?? checker.getSymbolAtLocation(callee);
+  if (symbol === undefined || checker.getSymbolName(symbol) !== "Error") {
+    return;
+  }
+  const isLibError = checker.getSymbolDeclarations(symbol).some((declaration) =>
+    declaration !== undefined && ast.getFileName(ast.getSourceFile(declaration)).endsWith(".d.ts"));
+  if (!isLibError) {
+    return;
+  }
+  const callArguments = ast.arguments(expression);
+  if (callArguments.length !== 1) {
+    return;
+  }
+  const [message] = callArguments;
+  const messageCarrier = message === undefined
+    ? undefined
+    : resolveExpressionCarrier(walk, message, sourceFile, pythonStrTargetType());
+  if (!isPythonStrCarrier(messageCarrier)) {
+    return;
+  }
+  setPythonOperationFact(walk, statement, { kind: "throw-op", operationId: "tsonic.python.error.throw" });
+}
+
+// --- Async/await ---------------------------------------------------------------
+
+// `await` owns the async source-call lane: the awaited call must target a
+// proven project async function and the result carrier is the unwrapped
+// Promise payload.
+function resolveAwaitCarrier(walk: PythonFactWalk, expression: Node, sourceFile: SourceFile): TargetTypeRef | undefined {
+  const { ast, checker } = walk.lifecycle.compiler;
+  const operand = Node_Expression(expression);
+  if (operand === undefined || ast.kindName(operand) !== KindCallExpression) {
+    return undefined;
+  }
+  const callee = Node_Expression(operand);
+  if (callee === undefined) {
+    return undefined;
+  }
+  const symbol = checker.getResolvedSymbolOrNil(callee) ?? checker.getSymbolAtLocation(callee);
+  if (symbol === undefined) {
+    return undefined;
+  }
+  const aliased = safeAliasedSymbol(checker, symbol) ?? symbol;
+  const declaration = checker.getSymbolValueDeclaration(aliased) ??
+    checker.getSymbolValueDeclaration(symbol) ??
+    checker.getPrimarySymbolDeclaration(aliased) ??
+    checker.getPrimarySymbolDeclaration(symbol) ??
+    checker.getSymbolDeclarations(symbol)[0];
+  if (declaration === undefined || ast.kindName(declaration) !== KindFunctionDeclaration) {
+    return undefined;
+  }
+  if (ast.getFileName(ast.getSourceFile(declaration)).endsWith(".d.ts") ||
+      !ast.hasModifierKind(declaration, "async")) {
+    return undefined;
+  }
+  const inner = promiseInnerCarrier(walk, Node_Type(declaration));
+  if (inner === undefined) {
+    return undefined;
+  }
+  const parameters = ast.parameters(declaration);
+  for (const [index, argument] of ast.arguments(operand).entries()) {
+    if (argument === undefined) {
+      continue;
+    }
+    const parameter = parameters[index];
+    const parameterCarrier = parameter === undefined
+      ? undefined
+      : walk.lifecycle.host.facts.get(parameter, runtimeCarrierFactKey)?.carrier ??
+        resolveTypeNodeCarrier(walk, Node_Type(parameter));
+    resolveExpressionCarrier(walk, argument, sourceFile, parameterCarrier);
+  }
+  setPythonOperationFact(walk, expression, {
+    kind: "await-op",
+    operationId: "tsonic.python.async.await",
+    resultCarrier: inner,
+  });
+  return setCarrierFact(walk, expression, inner);
 }
 
 function safeAliasedSymbol(

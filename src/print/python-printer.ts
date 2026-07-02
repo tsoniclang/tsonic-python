@@ -130,6 +130,7 @@ function printStatementLines(statement: PythonStatement, depth: number): readonl
       const returns = statement.returns === undefined ? "" : ` -> ${printPythonTypeAnnotation(statement.returns)}`;
       const keyword = statement.isAsync === true ? "async def" : "def";
       return [
+        ...(statement.decorators ?? []).map((decorator) => `${indent}@${decorator}`),
         `${indent}${keyword} ${statement.name}(${params})${returns}:`,
         ...printBlock(statement.body, depth + 1),
       ];

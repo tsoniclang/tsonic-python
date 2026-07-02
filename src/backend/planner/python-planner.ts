@@ -11,6 +11,7 @@ import {
   KindEndOfFile,
   KindFunctionDeclaration,
   KindImportDeclaration,
+  KindInterfaceDeclaration,
   Node_Name,
   Node_Type,
 } from "../../common/source-ast.js";
@@ -24,6 +25,7 @@ import { planPyprojectManifest } from "./pyproject.js";
 import { unsupportedStatementDiagnostic } from "./diagnostics.js";
 import { isValidPythonModuleName } from "../../common/python-names.js";
 import { planFunctionDeclaration } from "./functions.js";
+import { planClassDeclaration, planEnumDeclaration, planInterfaceDeclaration } from "./declarations.js";
 import { pythonHelperDefinitions } from "./runtime-helpers.js";
 import type { PythonImportRequirement, PythonPlanContext, PythonRuntimeHelper } from "./plan-context.js";
 
@@ -51,6 +53,7 @@ export function planPythonArtifacts(input: TargetCompileInput): TargetCompileRes
       diagnostics,
       collectedImports,
       usedHelpers,
+      awaitedCalls: new WeakSet(),
     };
     const planned = planModuleStatements(context);
     moduleStatements.set(moduleName, [
@@ -185,6 +188,27 @@ function planModuleStatements(context: PythonPlanContext): readonly PythonStatem
     }
     if (kind === KindFunctionDeclaration) {
       const planned = planFunctionDeclaration(statement, context);
+      if (planned !== undefined) {
+        statements.push(planned);
+      }
+      continue;
+    }
+    if (kind === "KindClassDeclaration") {
+      const planned = planClassDeclaration(statement, context);
+      if (planned !== undefined) {
+        statements.push(planned);
+      }
+      continue;
+    }
+    if (kind === "KindEnumDeclaration") {
+      const planned = planEnumDeclaration(statement, context);
+      if (planned !== undefined) {
+        statements.push(planned);
+      }
+      continue;
+    }
+    if (kind === KindInterfaceDeclaration) {
+      const planned = planInterfaceDeclaration(statement, context);
       if (planned !== undefined) {
         statements.push(planned);
       }

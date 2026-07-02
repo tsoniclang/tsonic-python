@@ -97,6 +97,7 @@ export type PythonStatement =
       readonly returns?: PythonTypeAnnotation;
       readonly body: readonly PythonStatement[];
       readonly isAsync?: boolean;
+      readonly decorators?: readonly string[];
     }
   | {
       readonly kind: "class-def";

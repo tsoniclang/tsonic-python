@@ -1,6 +1,7 @@
 import type { TargetTypeRef } from "@tsonic/tsts";
 import {
   KindAmpersandAmpersandToken,
+  KindAsteriskEqualsToken,
   KindAsteriskToken,
   KindBarBarToken,
   KindEqualsEqualsEqualsToken,
@@ -9,9 +10,13 @@ import {
   KindGreaterThanToken,
   KindLessThanEqualsToken,
   KindLessThanToken,
+  KindMinusEqualsToken,
   KindMinusToken,
+  KindPercentEqualsToken,
   KindPercentToken,
+  KindPlusEqualsToken,
   KindPlusToken,
+  KindSlashEqualsToken,
   KindSlashToken,
 } from "../../common/source-ast.js";
 import {
@@ -22,6 +27,7 @@ import {
   pythonSourcePrimitiveTargetType,
   samePythonPrimitiveCarrier,
 } from "../python-target-types.js";
+import { pythonSourceTypeCarrierValue } from "../python-facts/keys.js";
 
 export interface PythonBinaryOperatorSelection {
   readonly kind: "operator-token" | "string-concat";
@@ -87,10 +93,18 @@ export function selectPythonBinaryOperator(
   }
   const equality = equalityTokens[operatorKindName];
   if (equality !== undefined) {
+    // Values of the same proven enum compare natively: enums lower to
+    // IntEnum, so identity of the declaring shape is the soundness proof.
+    const leftEnum = pythonSourceTypeCarrierValue(left);
+    const rightEnum = pythonSourceTypeCarrierValue(right);
+    const sameEnum = leftEnum !== undefined && rightEnum !== undefined &&
+      leftEnum.shape === "enum" && rightEnum.shape === "enum" &&
+      leftEnum.fileName === rightEnum.fileName && leftEnum.typeName === rightEnum.typeName;
     const comparable =
       (isPythonNumericCarrier(left) && samePythonPrimitiveCarrier(left, right)) ||
       (isPythonBoolCarrier(left) && isPythonBoolCarrier(right)) ||
-      (isPythonStrCarrier(left) && isPythonStrCarrier(right));
+      (isPythonStrCarrier(left) && isPythonStrCarrier(right)) ||
+      sameEnum;
     return comparable
       ? { kind: "operator-token", pythonOperator: equality, resultCarrier: boolCarrier }
       : undefined;
@@ -102,6 +116,34 @@ export function selectPythonBinaryOperator(
       : undefined;
   }
   return undefined;
+}
+
+const compoundAssignmentTokens: Readonly<Record<string, string>> = {
+  [KindPlusEqualsToken]: "+=",
+  [KindMinusEqualsToken]: "-=",
+  [KindAsteriskEqualsToken]: "*=",
+  [KindSlashEqualsToken]: "/=",
+  [KindPercentEqualsToken]: "%=",
+};
+
+// Compound assignment keeps the left carrier. The `/=` spelling follows the
+// binary `/` rule: statically-integer carriers take floor division.
+export function selectPythonCompoundAssignment(
+  operatorKindName: string,
+  left: TargetTypeRef | undefined,
+  right: TargetTypeRef | undefined,
+): string | undefined {
+  const operator = compoundAssignmentTokens[operatorKindName];
+  if (operator === undefined || left === undefined || right === undefined) {
+    return undefined;
+  }
+  if (operatorKindName === KindPlusEqualsToken && isPythonStrCarrier(left) && isPythonStrCarrier(right)) {
+    return operator;
+  }
+  if (!isPythonNumericCarrier(left) || !samePythonPrimitiveCarrier(left, right)) {
+    return undefined;
+  }
+  return operatorKindName === KindSlashEqualsToken && isPythonIntegerCarrier(left) ? "//=" : operator;
 }
 
 const pythonSignedNumericKinds: ReadonlySet<string> = new Set([
@@ -123,6 +165,10 @@ export function pythonOperatorCarrierKey(carrier: TargetTypeRef): string {
   }
   if (carrier.kind === "target-named") {
     return carrier.id;
+  }
+  const sourceType = pythonSourceTypeCarrierValue(carrier);
+  if (sourceType !== undefined) {
+    return `${sourceType.shape}.${sourceType.typeName}`;
   }
   return carrier.kind;
 }

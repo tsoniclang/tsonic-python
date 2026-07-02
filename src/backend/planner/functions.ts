@@ -1,20 +1,22 @@
 import type { Node } from "@tsonic/tsts";
 import { KindIdentifier, Node_Name, Node_Type } from "../../common/source-ast.js";
 import { isValidPythonIdentifier } from "../../common/python-names.js";
+import { pythonAsyncFunctionFactKey } from "../../source/python-facts/keys.js";
 import type { PythonParameter, PythonStatement } from "../python-ast/nodes.js";
 import { missingFactDiagnostic, unsupportedConstructDiagnostic } from "./diagnostics.js";
 import { planBlockLike } from "./statements.js";
 import { diagnosticInput, pythonGeneratedNamePrefix, pythonLocalName } from "./plan-context.js";
 import type { PythonPlanContext } from "./plan-context.js";
-import { pythonTypeFromCarrier } from "./render-types.js";
+import { pythonTypeFromCarrierInContext } from "./render-types.js";
 
 export function planFunctionDeclaration(node: Node, context: PythonPlanContext): PythonStatement | undefined {
   const { ast } = context.input;
-  if (ast.hasModifierKind(node, "async")) {
-    context.diagnostics.push(unsupportedConstructDiagnostic(
+  const isAsync = ast.hasModifierKind(node, "async");
+  if (isAsync && context.input.facts.getFact(node, pythonAsyncFunctionFactKey) === undefined) {
+    context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
       "python.backend.async",
-      "Async functions are not supported by the static-native Python lowering.",
+      "Async functions require a finalized Python async lowering fact.",
     ));
     return undefined;
   }
@@ -51,7 +53,7 @@ export function planFunctionDeclaration(node: Node, context: PythonPlanContext):
     const parameterSourceName = ast.text(ast.name(parameter) ?? parameter);
     const parameterName = pythonLocalName(parameterSourceName);
     const parameterCarrier = context.input.facts.getRuntimeCarrierFact(parameter)?.carrier;
-    const parameterType = pythonTypeFromCarrier(parameterCarrier);
+    const parameterType = pythonTypeFromCarrierInContext(parameterCarrier, context);
     if (parameterName === undefined || parameterType === undefined) {
       context.diagnostics.push(missingFactDiagnostic(
         diagnosticInput(context, parameter),
@@ -83,7 +85,7 @@ export function planFunctionDeclaration(node: Node, context: PythonPlanContext):
     return undefined;
   }
   const returnCarrier = context.input.facts.getRuntimeCarrierFact(returnTypeNode)?.carrier;
-  const returns = pythonTypeFromCarrier(returnCarrier);
+  const returns = pythonTypeFromCarrierInContext(returnCarrier, context);
   if (returns === undefined) {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, returnTypeNode),
@@ -101,7 +103,7 @@ export function planFunctionDeclaration(node: Node, context: PythonPlanContext):
     ));
     return undefined;
   }
-  const bodyContext: PythonPlanContext = { ...context, localNames };
+  const bodyContext: PythonPlanContext = { ...context, localNames, ...(isAsync ? { insideAsync: true } : {}) };
   const body = planBlockLike(bodyNode, bodyContext);
   if (paramsFailed || body === undefined) {
     return undefined;
@@ -112,5 +114,6 @@ export function planFunctionDeclaration(node: Node, context: PythonPlanContext):
     params,
     returns,
     body: body.length === 0 ? [{ kind: "pass" }] : body,
+    ...(isAsync ? { isAsync: true } : {}),
   };
 }

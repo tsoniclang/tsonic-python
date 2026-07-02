@@ -60,11 +60,11 @@ export class Point {
   assertFailsClosed(result, /PYTHON_UNSUPPORTED_AST/u);
 });
 
-test("async functions fail closed", () => {
+test("async functions without a proven awaitable carrier fail closed", () => {
   const { result } = compilePython({
     files: {
       "index.ts": `
-export async function later(): Promise<string> {
+export async function later(): Promise<any> {
   return "soon";
 }
 `,
@@ -72,6 +72,26 @@ export async function later(): Promise<string> {
   });
 
   assertFailsClosed(result, /python\.backend\.async|PYTHON_MISSING_TARGET_FACT|PYTHON_UNSUPPORTED_AST/u);
+});
+
+test("await outside an async function fails closed", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+export async function inner(): Promise<string> {
+  return "soon";
+}
+
+export function outer(): string {
+  const pending = inner();
+  return "sync";
+}
+`,
+    },
+  });
+
+  // The unawaited call to an async function has no proven carrier lane.
+  assertFailsClosed(result);
 });
 
 test("sparse array literals fail closed in strict-native mode", () => {
