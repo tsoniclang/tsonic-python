@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path";
 import { createCompilerSessionFromFiles, formatDiagnostics } from "@tsonic/tsts";
 import { createTsonicCoreSourceExtension } from "@tsonic/source-core";
 import { createPythonBackend, createPythonTargetPack } from "../../dist/index.js";
-// Deep dist imports: these symbols are not (yet) re-exported from dist/index.js.
+// Deep dist imports keep the helper independent of the root barrel surface.
 import { createPythonCompileInputFromSession } from "../../dist/session/compile-input.js";
 import { createPythonProviderPackage } from "../../dist/source/provider-packages/index.js";
 

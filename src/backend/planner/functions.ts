@@ -4,7 +4,7 @@ import { isValidPythonIdentifier } from "../../common/python-names.js";
 import type { PythonParameter, PythonStatement } from "../python-ast/nodes.js";
 import { missingFactDiagnostic, unsupportedConstructDiagnostic } from "./diagnostics.js";
 import { planBlockLike } from "./statements.js";
-import { diagnosticInput, pythonLocalName } from "./plan-context.js";
+import { diagnosticInput, pythonGeneratedNamePrefix, pythonLocalName } from "./plan-context.js";
 import type { PythonPlanContext } from "./plan-context.js";
 import { pythonTypeFromCarrier } from "./render-types.js";
 
@@ -21,8 +21,9 @@ export function planFunctionDeclaration(node: Node, context: PythonPlanContext):
   const nameNode = Node_Name(node);
   const sourceName = nameNode !== undefined && ast.kindName(nameNode) === KindIdentifier ? ast.text(nameNode) : "";
   // Function names are part of the module import surface: preserved verbatim,
-  // never mangled. Reserved or invalid public names fail closed.
-  if (!isValidPythonIdentifier(sourceName)) {
+  // never mangled. Reserved or invalid public names fail closed, as do names
+  // in the generated-helper namespace.
+  if (!isValidPythonIdentifier(sourceName) || sourceName.startsWith(pythonGeneratedNamePrefix)) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
       "python.backend.function",

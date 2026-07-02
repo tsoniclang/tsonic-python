@@ -128,6 +128,49 @@ export function main(): void {
   });
 });
 
+test("integer division and remainder truncate toward zero at runtime", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import type { int32 } from "@tsonic/core/types.js";
+
+export function quot(a: int32, b: int32): int32 {
+  return a / b;
+}
+
+export function rem(a: int32, b: int32): int32 {
+  return a % b;
+}
+`,
+    },
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_intmath", result.artifacts);
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "from tsonic_generated.index import quot, rem",
+    "",
+    "assert quot(7, 2) == 3",
+    "assert quot(-7, 2) == -3, quot(-7, 2)",
+    "assert quot(7, -2) == -3, quot(7, -2)",
+    "assert quot(-7, -2) == 3",
+    "assert quot(-6, 2) == -3",
+    "assert rem(7, 2) == 1",
+    "assert rem(-7, 2) == -1, rem(-7, 2)",
+    "assert rem(7, -2) == 1, rem(7, -2)",
+    "assert rem(-7, -2) == -1",
+    "assert rem(-6, 2) == 0",
+    'print("INT-CONTRACT-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
+  assert.match(run.stdout, /INT-CONTRACT-OK/u);
+});
+
 test("generated modules parse under the python ast module", () => {
   const { result } = compilePython({
     files: {

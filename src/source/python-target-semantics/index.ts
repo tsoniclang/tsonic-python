@@ -155,7 +155,7 @@ export function recordPythonFactsBeforeFinalization(
 
 function recordFunctionFacts(walk: PythonFactWalk, declaration: Node, sourceFile: SourceFile): void {
   const { ast } = walk.lifecycle.compiler;
-  // Async functions have no P2 Python lane; the declaration fails closed.
+  // Async functions have no static-native Python lane; the declaration fails closed.
   if (ast.hasModifierKind(declaration, "async")) {
     return;
   }
@@ -240,7 +240,7 @@ function recordStatementFacts(
           return;
         }
         if (leftKind === KindPropertyAccessExpression) {
-          // Property writes (including `.length =`) have no P2 lane.
+          // Property writes (including `.length =`) have no static-native lane.
           return;
         }
         const leftCarrier = resolveExpressionCarrier(walk, left, sourceFile, undefined);
@@ -324,7 +324,7 @@ function resolveTypeNodeCarrier(walk: PythonFactWalk, typeNode: Node | undefined
   const primitive = facts.get(typeNode, sourcePrimitiveFactKey);
   if (primitive !== undefined) {
     // Only primitive kinds with a Python lane produce carriers; the rest
-    // fail closed until a lane owns them.
+    // fail closed without an owning lane.
     if (pythonPrimitiveTypeName(primitive.kind) === undefined) {
       return undefined;
     }
@@ -839,7 +839,7 @@ function resolveArrayLiteralCarrier(
   const { ast } = walk.lifecycle.compiler;
   const elements = ast.elements(expression).filter((element): element is Node => element !== undefined);
   if (elements.some((element) => ast.kindName(element) === KindOmittedExpression)) {
-    // Sparse literals have no P2 lane.
+    // Sparse literals have no static-native lane.
     return undefined;
   }
   let expectedElement = pythonListElementCarrier(expected);

@@ -24,7 +24,8 @@ import { planPyprojectManifest } from "./pyproject.js";
 import { unsupportedStatementDiagnostic } from "./diagnostics.js";
 import { isValidPythonModuleName } from "../../common/python-names.js";
 import { planFunctionDeclaration } from "./functions.js";
-import type { PythonImportRequirement, PythonPlanContext } from "./plan-context.js";
+import { pythonHelperDefinitions } from "./runtime-helpers.js";
+import type { PythonImportRequirement, PythonPlanContext, PythonRuntimeHelper } from "./plan-context.js";
 
 export function planPythonArtifacts(input: TargetCompileInput): TargetCompileResult {
   const diagnostics: TargetDiagnostic[] = [];
@@ -41,6 +42,7 @@ export function planPythonArtifacts(input: TargetCompileInput): TargetCompileRes
       continue;
     }
     const collectedImports = new Map<string, PythonImportRequirement>();
+    const usedHelpers = new Set<PythonRuntimeHelper>();
     const context: PythonPlanContext = {
       input,
       sourceFile,
@@ -48,9 +50,14 @@ export function planPythonArtifacts(input: TargetCompileInput): TargetCompileRes
       moduleNameByFileName,
       diagnostics,
       collectedImports,
+      usedHelpers,
     };
     const planned = planModuleStatements(context);
-    moduleStatements.set(moduleName, [...renderCollectedImports(collectedImports), ...planned]);
+    moduleStatements.set(moduleName, [
+      ...renderCollectedImports(collectedImports),
+      ...pythonHelperDefinitions(usedHelpers),
+      ...planned,
+    ]);
   }
 
   const manifestPlan = planPyprojectManifest(input.target, input.runtimeReferences);

@@ -74,7 +74,7 @@ export async function later(): Promise<string> {
   assertFailsClosed(result, /python\.backend\.async|PYTHON_MISSING_TARGET_FACT|PYTHON_UNSUPPORTED_AST/u);
 });
 
-test("sparse array literals stay fail-closed until python-js", () => {
+test("sparse array literals fail closed in strict-native mode", () => {
   const { result } = compilePython({
     files: {
       "index.ts": `

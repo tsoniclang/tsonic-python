@@ -30,7 +30,14 @@ import { isPythonFloatCarrier, isPythonIntegerCarrier } from "../../source/pytho
 import { isValidPythonIdentifier } from "../../common/python-names.js";
 import type { PythonBinaryOperator, PythonExpression, PythonUnaryOperator } from "../python-ast/nodes.js";
 import { missingFactDiagnostic, unsupportedConstructDiagnostic } from "./diagnostics.js";
-import { collectFromImport, collectModuleImport, diagnosticInput, pythonLocalName } from "./plan-context.js";
+import {
+  collectFromImport,
+  collectHelper,
+  collectModuleImport,
+  diagnosticInput,
+  pythonHelperNames,
+  pythonLocalName,
+} from "./plan-context.js";
 import type { PythonPlanContext } from "./plan-context.js";
 
 const pythonBinaryOperators: ReadonlySet<string> = new Set<PythonBinaryOperator>([
@@ -43,6 +50,43 @@ const pythonUnaryOperators: ReadonlySet<string> = new Set<PythonUnaryOperator>([
 // fact operator outside the printable set fails closed.
 export function asPythonBinaryOperator(operator: string): PythonBinaryOperator | undefined {
   return pythonBinaryOperators.has(operator) ? (operator as PythonBinaryOperator) : undefined;
+}
+
+// Lower a finalized operator selection to Python. Truncating integer
+// division/remainder (the shared integer contract) differ from Python's
+// flooring // and %: they lower to generated module helpers; float remainder
+// carries C-style fmod semantics and lowers to math.fmod.
+export function planOperatorTokenLowering(
+  operator: string,
+  resultCarrier: TargetTypeRef | undefined,
+  left: PythonExpression,
+  right: PythonExpression,
+  context: PythonPlanContext,
+): PythonExpression | undefined {
+  if (operator === "//") {
+    if (!isPythonIntegerCarrier(resultCarrier)) {
+      return undefined;
+    }
+    collectHelper(context, "int-div");
+    return { kind: "call", callee: { kind: "name", name: pythonHelperNames["int-div"] }, args: [left, right] };
+  }
+  if (operator === "%") {
+    if (isPythonIntegerCarrier(resultCarrier)) {
+      collectHelper(context, "int-rem");
+      return { kind: "call", callee: { kind: "name", name: pythonHelperNames["int-rem"] }, args: [left, right] };
+    }
+    if (isPythonFloatCarrier(resultCarrier)) {
+      collectModuleImport(context, "math");
+      return {
+        kind: "call",
+        callee: { kind: "attribute", value: { kind: "name", name: "math" }, name: "fmod" },
+        args: [left, right],
+      };
+    }
+    return undefined;
+  }
+  const printable = asPythonBinaryOperator(operator);
+  return printable === undefined ? undefined : { kind: "binary", operator: printable, left, right };
 }
 
 function asPythonUnaryOperator(operator: string): PythonUnaryOperator | undefined {
@@ -225,8 +269,8 @@ function planBinaryExpression(node: Node, context: PythonPlanContext): PythonExp
     return { kind: "binary", operator: "+", left, right };
   }
   if (fact.kind === "operator-token") {
-    const operator = asPythonBinaryOperator(fact.operator);
-    if (operator === undefined) {
+    const lowered = planOperatorTokenLowering(fact.operator, fact.resultCarrier, left, right, context);
+    if (lowered === undefined) {
       context.diagnostics.push(unsupportedConstructDiagnostic(
         diagnosticInput(context, node),
         "python.backend.operator",
@@ -234,7 +278,7 @@ function planBinaryExpression(node: Node, context: PythonPlanContext): PythonExp
       ));
       return undefined;
     }
-    return { kind: "binary", operator, left, right };
+    return lowered;
   }
   context.diagnostics.push(unsupportedConstructDiagnostic(
     diagnosticInput(context, node),

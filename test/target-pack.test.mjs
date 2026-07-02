@@ -12,7 +12,7 @@ test("python target pack registers under the python target id", () => {
   assert.equal(pack.displayName, "Python");
 });
 
-test("python target pack declares no surfaces or provider packages yet", () => {
+test("python target pack declares no built-in surfaces or provider packages", () => {
   const pack = createPythonTargetPack();
 
   assert.deepEqual(pack.surfaces, []);

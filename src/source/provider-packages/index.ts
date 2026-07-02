@@ -62,7 +62,93 @@ export interface PythonProviderOperationContributor {
 export type PythonProviderPackageImplementation =
   TargetProviderPackageImplementation & PythonProviderOperationContributor;
 
+const pythonIdentifierPattern = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+const pythonModulePathPattern = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/u;
+
+// Hard Python keywords are invalid in any name position. Soft keywords
+// (match, case, type) stay allowed: providers legitimately map names like
+// re.match.
+const pythonHardKeywords: ReadonlySet<string> = new Set([
+  "False", "None", "True",
+  "and", "as", "assert", "async", "await",
+  "break", "class", "continue",
+  "def", "del",
+  "elif", "else", "except",
+  "finally", "for", "from",
+  "global",
+  "if", "import", "in", "is",
+  "lambda",
+  "nonlocal", "not",
+  "or",
+  "pass",
+  "raise", "return",
+  "try",
+  "while", "with",
+  "yield",
+]);
+
+function isRenderablePythonName(name: string): boolean {
+  return pythonIdentifierPattern.test(name) && !pythonHardKeywords.has(name);
+}
+
+function isRenderablePythonModulePath(path: string): boolean {
+  return pythonModulePathPattern.test(path) && path.split(".").every((segment) => !pythonHardKeywords.has(segment));
+}
+
+function validatePythonProviderPackageDefinition(definition: PythonProviderPackageDefinition): void {
+  const packageId = definition.id;
+  for (const module of definition.modules) {
+    if (module.moduleSpecifier.length === 0) {
+      throw new Error(`Provider package '${packageId}': module specifiers must be non-empty.`);
+    }
+    if (module.providerModuleId.length === 0) {
+      throw new Error(`Provider package '${packageId}': provider module ids must be non-empty.`);
+    }
+  }
+  const seenRows = new Set<string>();
+  for (const row of definition.operations) {
+    const rowLabel = row.memberId ?? row.exportId;
+    const rowKey = [row.exportId, row.memberId ?? "", row.signatureId ?? "", row.receiverTypeId ?? "", row.operationKind].join("|");
+    if (seenRows.has(rowKey)) {
+      throw new Error(`Provider package '${packageId}': duplicate operation row for '${rowLabel}' (${row.operationKind}).`);
+    }
+    seenRows.add(rowKey);
+    if ((row.resultCarrier as unknown) === undefined) {
+      throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' is missing a result carrier.`);
+    }
+    validatePythonProviderOperationForm(packageId, rowLabel, row.target);
+  }
+}
+
+function validatePythonProviderOperationForm(packageId: string, rowLabel: string, form: PythonProviderOperationForm): void {
+  const rejectName = (name: string, what: string): void => {
+    if (!isRenderablePythonName(name)) {
+      throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' has an invalid Python ${what} '${name}'.`);
+    }
+  };
+  if (form.form === "method" || form.form === "property") {
+    rejectName(form.name, "member name");
+    return;
+  }
+  if (form.form === "index") {
+    return;
+  }
+  const binding = form.import;
+  if (!isRenderablePythonModulePath(binding.module)) {
+    throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' has an invalid Python module '${binding.module}'.`);
+  }
+  if (binding.style === "from") {
+    rejectName(binding.name, "import name");
+  } else if (binding.name !== undefined) {
+    rejectName(binding.name, "import name");
+  }
+  if (form.form === "static-attribute") {
+    rejectName(form.name, "attribute name");
+  }
+}
+
 export function createPythonProviderPackage(definition: PythonProviderPackageDefinition): PythonProviderPackageImplementation {
+  validatePythonProviderPackageDefinition(definition);
   return {
     id: definition.id,
     displayName: definition.displayName,

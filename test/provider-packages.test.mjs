@@ -180,3 +180,91 @@ export function probe(): string {
 test("str carrier constant matches the provider row contract", () => {
   assert.deepEqual(strCarrier, { kind: "target-named", id: "python.str" });
 });
+
+function packageDefinition(overrides) {
+  return {
+    id: "acme-bad",
+    displayName: "Bad fake package",
+    version: "0.0.1",
+    modules: [{
+      moduleSpecifier: "@acme/bad",
+      providerModuleId: "acme.bad",
+      exports: [],
+    }],
+    operations: [],
+    dependencies: [],
+    ...overrides,
+  };
+}
+
+const validRow = {
+  exportId: "@acme/bad::thing",
+  operationKind: "method",
+  target: { form: "call", import: { style: "from", module: "acme_bad", name: "thing" } },
+  resultCarrier: strCarrier,
+};
+
+test("provider package creation rejects duplicate operation rows", () => {
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({ operations: [validRow, { ...validRow }] })),
+    /duplicate operation row/u,
+  );
+});
+
+test("provider package creation rejects invalid Python import and member names", () => {
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      operations: [{ ...validRow, target: { form: "call", import: { style: "from", module: "acme bad", name: "thing" } } }],
+    })),
+    /invalid Python module/u,
+  );
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      operations: [{ ...validRow, target: { form: "call", import: { style: "from", module: "acme_bad", name: "not a name" } } }],
+    })),
+    /invalid Python import name/u,
+  );
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      operations: [{ ...validRow, operationKind: "property", target: { form: "property", name: "class" } }],
+    })),
+    /invalid Python member name/u,
+  );
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      operations: [{ ...validRow, target: { form: "static-attribute", import: { style: "module", module: "acme_bad" }, name: "0bad" } }],
+    })),
+    /invalid Python attribute name/u,
+  );
+});
+
+test("provider package creation rejects empty module identities and missing carriers", () => {
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      modules: [{ moduleSpecifier: "", providerModuleId: "acme.bad", exports: [] }],
+    })),
+    /module specifiers must be non-empty/u,
+  );
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      modules: [{ moduleSpecifier: "@acme/bad", providerModuleId: "", exports: [] }],
+    })),
+    /provider module ids must be non-empty/u,
+  );
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      operations: [{ ...validRow, resultCarrier: undefined }],
+    })),
+    /missing a result carrier/u,
+  );
+});
+
+test("dotted provider modules are accepted; reserved segments are not member names", () => {
+  const dotted = createPythonProviderPackage(packageDefinition({
+    operations: [{
+      ...validRow,
+      target: { form: "call", import: { style: "module", module: "acme_bad.sub_mod", name: "thing" } },
+    }],
+  }));
+  assert.equal(dotted.id, "acme-bad");
+});

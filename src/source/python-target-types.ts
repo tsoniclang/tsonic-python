@@ -44,7 +44,7 @@ export function pythonListElementCarrier(carrier: TargetTypeRef | undefined): Ta
 // Static-native primitive lowering: every proven integer width lowers to the
 // Python arbitrary-precision int; proven binary floats lower to float. Other
 // primitive kinds (char, decimal, float16, native ints) stay unmapped and
-// fail closed until a lane owns them.
+// fail closed without an owning lane.
 const pythonIntegerPrimitiveKinds: ReadonlySet<SourcePrimitiveKind> = new Set([
   "int8",
   "uint8",

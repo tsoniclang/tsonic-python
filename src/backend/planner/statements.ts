@@ -38,7 +38,7 @@ import {
 import { isPythonBoolCarrier } from "../../source/python-target-types.js";
 import type { PythonExpression, PythonStatement, PythonTypeAnnotation } from "../python-ast/nodes.js";
 import { missingFactDiagnostic, unsupportedConstructDiagnostic } from "./diagnostics.js";
-import { asPythonBinaryOperator, expressionCarrier, planExpression, pythonOperationFact } from "./expressions.js";
+import { expressionCarrier, planExpression, planOperatorTokenLowering, pythonOperationFact } from "./expressions.js";
 import { diagnosticInput, pythonLocalName } from "./plan-context.js";
 import type { PythonPlanContext } from "./plan-context.js";
 import { pythonTypeFromCarrier } from "./render-types.js";
@@ -333,8 +333,14 @@ function planExpressionStatement(node: Node, context: PythonPlanContext): readon
         ));
         return undefined;
       }
-      const operator = asPythonBinaryOperator(fact.operator.slice(0, -1));
-      if (operator === undefined) {
+      const lowered = planOperatorTokenLowering(
+        fact.operator.slice(0, -1),
+        fact.resultCarrier,
+        { kind: "name", name: target },
+        value,
+        context,
+      );
+      if (lowered === undefined) {
         context.diagnostics.push(unsupportedConstructDiagnostic(
           diagnosticInput(context, expression),
           "python.backend.operator",
@@ -342,11 +348,7 @@ function planExpressionStatement(node: Node, context: PythonPlanContext): readon
         ));
         return undefined;
       }
-      return [{
-        kind: "assign",
-        targetName: target,
-        value: { kind: "binary", operator, left: { kind: "name", name: target }, right: value },
-      }];
+      return [{ kind: "assign", targetName: target, value: lowered }];
     }
   }
   if (expressionKind === KindPostfixUnaryExpression || expressionKind === KindPrefixUnaryExpression) {
