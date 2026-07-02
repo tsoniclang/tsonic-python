@@ -5,8 +5,10 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
+  acmeAioPackage,
   acmeFilesPackage,
   acmeMathPackage,
+  acmePathsPackage,
   acmePlatformPackage,
   compilePython,
   fixturePackagesRoot,
@@ -274,6 +276,80 @@ export async function slowQuadruple(value: int32): Promise<int32> {
     env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
   });
   assert.match(run.stdout, /CLOSURE-OK/u);
+});
+
+test("stdlib-style provider class executes against its fixture package", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import { FilePath } from "@acme/paths";
+
+export function rename(path: string, ext: string): string {
+  const file = new FilePath(path);
+  const next = file.withSuffix(ext);
+  return next.suffix + FilePath.sep;
+}
+`,
+    },
+    packages: [acmePathsPackage()],
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_paths", result.artifacts);
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "from tsonic_generated.index import rename",
+    "",
+    'assert rename("notes.txt", ".md") == ".md/", rename("notes.txt", ".md")',
+    'assert rename("archive", ".tar") == ".tar/"',
+    'print("PATHS-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      PYTHONPATH: [join(projectRoot, "src"), fixturePackagesRoot].join(":"),
+    },
+  });
+  assert.match(run.stdout, /PATHS-OK/u);
+});
+
+test("async provider rows execute against a real async fixture package", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import { fetchText } from "@acme/aio";
+
+export async function load(key: string): Promise<string> {
+  const body: string = await fetchText(key);
+  return body + "!";
+}
+`,
+    },
+    packages: [acmeAioPackage()],
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_aio", result.artifacts);
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "import asyncio",
+    "",
+    "from tsonic_generated.index import load",
+    "",
+    'assert asyncio.run(load("news")) == "aio:news!"',
+    'print("AIO-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      PYTHONPATH: [join(projectRoot, "src"), fixturePackagesRoot].join(":"),
+    },
+  });
+  assert.match(run.stdout, /AIO-OK/u);
 });
 
 test("generated modules parse under the python ast module", () => {

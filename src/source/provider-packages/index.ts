@@ -37,6 +37,9 @@ export interface PythonProviderOperationRow {
   readonly target: PythonProviderOperationForm;
   readonly resultCarrier: TargetTypeRef;
   readonly parameterCarriers?: readonly TargetTypeRef[];
+  // Async provider operations lower only as await operands; the result
+  // carrier is the awaited payload. Supported on method rows only.
+  readonly isAsync?: boolean;
 }
 
 export interface PythonProviderDependencyDefinition {
@@ -135,6 +138,13 @@ function validatePythonProviderPackageDefinition(definition: PythonProviderPacka
     seenRows.add(rowKey);
     if ((row.resultCarrier as unknown) === undefined) {
       throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' is missing a result carrier.`);
+    }
+    if (row.isAsync === true && row.operationKind !== "method") {
+      throw new Error(`Provider package '${packageId}': isAsync is supported only on method operations (row '${rowLabel}').`);
+    }
+    const receiverForms = new Set(["method", "property", "index", "builtin-call"]);
+    if (receiverForms.has(row.target.form) && (row.receiverTypeId === undefined || row.receiverTypeId.length === 0)) {
+      throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' uses a receiver form and requires a receiverTypeId.`);
     }
     validatePythonProviderOperationForm(packageId, rowLabel, row.target);
   }

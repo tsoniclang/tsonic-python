@@ -132,6 +132,119 @@ export function acmePlatformPackage() {
   });
 }
 
+export const filePathCarrier = { kind: "target-named", id: "acme.paths.FilePath" };
+
+// Stdlib-style fixture: a pathlib-shaped class with constructor, instance
+// property, receiver method, and a class-level static attribute.
+export function acmePathsPackage() {
+  return createPythonProviderPackage({
+    id: "acme-paths",
+    displayName: "Acme paths",
+    version: "1.0.0",
+    modules: [{
+      moduleSpecifier: "@acme/paths",
+      providerModuleId: "acme.paths",
+      exports: [{
+        id: "@acme/paths::FilePath",
+        name: "FilePath",
+        kind: "class",
+        members: [
+          {
+            id: "@acme/paths::FilePath.constructor",
+            name: "constructor",
+            kind: "constructor",
+            signatures: [{
+              id: "@acme/paths::FilePath.constructor(text)",
+              parameters: [{ name: "text", type: { kind: "string" } }],
+            }],
+          },
+          { id: "@acme/paths::FilePath.suffix", name: "suffix", kind: "property", readonly: true, type: { kind: "string" } },
+          {
+            id: "@acme/paths::FilePath.withSuffix",
+            name: "withSuffix",
+            kind: "method",
+            signatures: [{
+              id: "@acme/paths::FilePath.withSuffix(next)",
+              name: "withSuffix",
+              parameters: [{ name: "next", type: { kind: "string" } }],
+              returnType: { kind: "provider-ref", moduleSpecifier: "@acme/paths", exportName: "FilePath" },
+            }],
+          },
+          { id: "@acme/paths::FilePath.sep", name: "sep", kind: "property", static: true, readonly: true, type: { kind: "string" } },
+        ],
+      }],
+    }],
+    operations: [
+      {
+        exportId: "@acme/paths::FilePath",
+        operationKind: "constructor",
+        target: { form: "constructor", import: { style: "from", module: "acme_paths", name: "FilePath" } },
+        resultCarrier: filePathCarrier,
+        parameterCarriers: [strCarrier],
+      },
+      {
+        exportId: "@acme/paths::FilePath",
+        memberId: "@acme/paths::FilePath.suffix",
+        receiverTypeId: "acme.paths.FilePath",
+        operationKind: "property",
+        target: { form: "property", name: "suffix" },
+        resultCarrier: strCarrier,
+      },
+      {
+        exportId: "@acme/paths::FilePath",
+        memberId: "@acme/paths::FilePath.withSuffix",
+        receiverTypeId: "acme.paths.FilePath",
+        operationKind: "method",
+        target: { form: "method", name: "with_suffix" },
+        resultCarrier: filePathCarrier,
+        parameterCarriers: [strCarrier],
+      },
+      {
+        exportId: "@acme/paths::FilePath",
+        memberId: "@acme/paths::FilePath.sep",
+        operationKind: "property",
+        target: { form: "static-attribute", import: { style: "from", module: "acme_paths", name: "FilePath" }, name: "sep" },
+        resultCarrier: strCarrier,
+      },
+    ],
+    dependencies: [{ name: "acme-paths" }],
+    targetIdentities: { "@acme/paths::FilePath": "acme.paths.FilePath" },
+  });
+}
+
+// Async provider fixture: rows marked isAsync lower only as await operands.
+export function acmeAioPackage() {
+  return createPythonProviderPackage({
+    id: "acme-aio",
+    displayName: "Acme aio",
+    version: "1.0.0",
+    modules: [{
+      moduleSpecifier: "@acme/aio",
+      providerModuleId: "acme.aio",
+      exports: [{
+        id: "@acme/aio::fetchText",
+        name: "fetchText",
+        kind: "function",
+        signatures: [{
+          id: "@acme/aio::fetchText(key)",
+          name: "fetchText",
+          parameters: [{ name: "key", type: { kind: "string" } }],
+          returnType: { kind: "string" },
+        }],
+      }],
+    }],
+    operations: [{
+      exportId: "@acme/aio::fetchText",
+      operationKind: "method",
+      isAsync: true,
+      target: { form: "call", import: { style: "from", module: "acme_aio", name: "fetch_text" } },
+      resultCarrier: strCarrier,
+      parameterCarriers: [strCarrier],
+    }],
+    dependencies: [{ name: "acme-aio" }],
+  });
+}
+
 export function acmeVectorsPackage() {
   return createPythonProviderPackage({
     id: "acme-vectors",

@@ -874,6 +874,11 @@ function resolveCallLikeCarrier(
       appendProviderOperationDiagnostic(walk, providerIdentity, operationKind);
       return undefined;
     }
+    if (row.isAsync === true) {
+      // Async rows lower only as await operands; an unawaited call records
+      // nothing and fails closed downstream.
+      return undefined;
+    }
     if (ast.kindName(callee) === KindPropertyAccessExpression) {
       const receiver = Node_Expression(callee);
       if (receiver !== undefined) {
@@ -1798,9 +1803,9 @@ function recordThrowFacts(walk: PythonFactWalk, statement: Node, sourceFile: Sou
 
 // --- Async/await ---------------------------------------------------------------
 
-// `await` owns the async source-call lane: the awaited call must target a
-// proven project async function and the result carrier is the unwrapped
-// Promise payload.
+// `await` owns the async call lanes: the awaited call must target a proven
+// project async function or an async provider method row, and the result
+// carrier is the awaited payload.
 function resolveAwaitCarrier(walk: PythonFactWalk, expression: Node, sourceFile: SourceFile): TargetTypeRef | undefined {
   const { ast, checker } = walk.lifecycle.compiler;
   const operand = unwrapParenthesized(ast, Node_Expression(expression));
@@ -1810,6 +1815,10 @@ function resolveAwaitCarrier(walk: PythonFactWalk, expression: Node, sourceFile:
   const callee = Node_Expression(operand);
   if (callee === undefined) {
     return undefined;
+  }
+  const providerAwait = tryAsyncProviderAwait(walk, expression, operand, callee, sourceFile);
+  if (providerAwait !== undefined) {
+    return providerAwait;
   }
   const symbol = checker.getResolvedSymbolOrNil(callee) ?? checker.getSymbolAtLocation(callee);
   if (symbol === undefined) {
@@ -1850,6 +1859,47 @@ function resolveAwaitCarrier(walk: PythonFactWalk, expression: Node, sourceFile:
     resultCarrier: inner,
   });
   return setCarrierFact(walk, expression, inner);
+}
+
+// Awaited calls to async provider method rows: the provider-operation fact
+// lands on the call, the await-op fact on the enclosing await expression,
+// and the row's result carrier is the awaited payload. The source-side
+// declaration types the export as Promise<T>; expectations come from the
+// row's parameter carriers, never from the source types.
+function tryAsyncProviderAwait(
+  walk: PythonFactWalk,
+  expression: Node,
+  operand: Node,
+  callee: Node,
+  sourceFile: SourceFile,
+): TargetTypeRef | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  const providerIdentity = providerDeclarationIdentityFor(walk, callee);
+  if (providerIdentity === undefined) {
+    return undefined;
+  }
+  const row = matchProviderRow(walk.providerRows, providerIdentity, "method");
+  if (row === undefined || row.isAsync !== true) {
+    return undefined;
+  }
+  if (ast.kindName(callee) === KindPropertyAccessExpression) {
+    const receiver = Node_Expression(callee);
+    if (receiver !== undefined) {
+      resolveExpressionCarrier(walk, receiver, sourceFile, undefined);
+    }
+  }
+  for (const [index, argument] of ast.arguments(operand).entries()) {
+    if (argument !== undefined) {
+      resolveExpressionCarrier(walk, argument, sourceFile, row.parameterCarriers?.[index]);
+    }
+  }
+  recordProviderOperationFacts(walk, operand, row, providerIdentity);
+  setPythonOperationFact(walk, expression, {
+    kind: "await-op",
+    operationId: "tsonic.python.async.await",
+    resultCarrier: row.resultCarrier,
+  });
+  return setCarrierFact(walk, expression, row.resultCarrier);
 }
 
 function safeAliasedSymbol(

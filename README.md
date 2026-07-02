@@ -51,9 +51,17 @@ names and post-mangling collisions fail closed.
 
 Provider packages: `createPythonProviderPackage` supplies virtual module
 declarations, selected identity mapping, Python operation rows
-(call/constructor/property/indexer with from-import or module-attribute
-rendering), and pyproject dependency rows. Provider exports without operation
-rows fail closed.
+(call/constructor/property/method/static-attribute/indexer with from-import
+or module-attribute rendering), and pyproject dependency rows. Package
+creation validates metadata structurally: duplicate modules/exports/rows,
+rows referencing undeclared exports, invalid Python names, receiver-form rows
+without a receiver type, and misplaced `isAsync` all throw. Rows marked
+`isAsync` lower only as await operands; unawaited calls fail closed. Python
+needs no fallibility marking on rows: exceptions propagate natively, unlike
+targets that lower errors through result types. Provider exports without
+operation rows fail closed. Concrete Python library names live only in
+provider metadata, tests, and package definitions — never in compiler
+branches, which the architecture scanners enforce.
 
 Semantic closure lanes: project-source classes (annotated fields,
 constructor with `self` attribute writes, instance methods, `@staticmethod`

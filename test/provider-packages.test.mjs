@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  acmeAioPackage,
   acmeFilesPackage,
   acmeMathPackage,
+  acmePathsPackage,
   acmePlatformPackage,
   acmeVectorsPackage,
   artifactText,
@@ -102,6 +104,67 @@ export function first(): int32 {
   const text = artifactText(result, "src/tsonic_generated/index.py");
   assert.match(text, /vec = Vector\(1, 2\)/u);
   assert.match(text, /return vec\[index\]/u);
+});
+
+test("stdlib-style class rows lower: constructor, property, method, static attribute", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import { FilePath } from "@acme/paths";
+
+export function rename(path: string, ext: string): string {
+  const file = new FilePath(path);
+  const next = file.withSuffix(ext);
+  return next.suffix + FilePath.sep;
+}
+`,
+    },
+    packages: [acmePathsPackage()],
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const text = artifactText(result, "src/tsonic_generated/index.py");
+  assert.match(text, /from acme_paths import FilePath/u);
+  assert.match(text, /file = FilePath\(path\)/u);
+  assert.match(text, /next = file\.with_suffix\(ext\)/u);
+  assert.match(text, /return next\.suffix \+ FilePath\.sep/u);
+});
+
+test("async provider rows lower only as await operands", () => {
+  const awaited = compilePython({
+    files: {
+      "index.ts": `
+import { fetchText } from "@acme/aio";
+
+export async function load(key: string): Promise<string> {
+  const body: string = await fetchText(key);
+  return body;
+}
+`,
+    },
+    packages: [acmeAioPackage()],
+  });
+  assert.deepEqual(awaited.result.diagnostics, []);
+  const text = artifactText(awaited.result, "src/tsonic_generated/index.py");
+  assert.match(text, /from acme_aio import fetch_text/u);
+  assert.match(text, /async def load\(key: str\) -> str:/u);
+  assert.match(text, /body: str = await fetch_text\(key\)/u);
+
+  const unawaited = compilePython({
+    files: {
+      "index.ts": `
+import { fetchText } from "@acme/aio";
+
+export async function load(key: string): Promise<string> {
+  const pending = fetchText(key);
+  return pending;
+}
+`,
+    },
+    packages: [acmeAioPackage()],
+  });
+  assert.equal(unawaited.result.artifacts.length, 0);
+  assert.ok(unawaited.result.diagnostics.length > 0);
 });
 
 test("provider dependencies become pyproject dependencies", () => {
@@ -236,7 +299,7 @@ test("provider package creation rejects invalid Python import and member names",
   );
   assert.throws(
     () => createPythonProviderPackage(packageDefinition({
-      operations: [{ ...validRow, operationKind: "property", target: { form: "property", name: "class" } }],
+      operations: [{ ...validRow, operationKind: "property", receiverTypeId: "acme.bad.Thing", target: { form: "property", name: "class" } }],
     })),
     /invalid Python member name/u,
   );
@@ -297,6 +360,21 @@ test("provider metadata fails at creation for structural inconsistencies", () =>
       operations: [{ ...validRow, exportId: "@acme/bad::ghost" }],
     })),
     /undeclared export/u,
+  );
+});
+
+test("receiver-form rows require a receiverTypeId and isAsync is method-only", () => {
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      operations: [{ ...validRow, operationKind: "property", target: { form: "property", name: "size" } }],
+    })),
+    /requires a receiverTypeId/u,
+  );
+  assert.throws(
+    () => createPythonProviderPackage(packageDefinition({
+      operations: [{ ...validRow, operationKind: "property", isAsync: true, receiverTypeId: "acme.bad.Thing", target: { form: "property", name: "size" } }],
+    })),
+    /isAsync is supported only on method operations/u,
   );
 });
 
