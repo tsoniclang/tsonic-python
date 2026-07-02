@@ -31,7 +31,14 @@ export type PythonExpression =
   | { readonly kind: "binary"; readonly operator: PythonBinaryOperator; readonly left: PythonExpression; readonly right: PythonExpression }
   | { readonly kind: "unary"; readonly operator: PythonUnaryOperator; readonly operand: PythonExpression }
   | { readonly kind: "subscript"; readonly value: PythonExpression; readonly index: PythonExpression }
-  | { readonly kind: "list"; readonly elements: readonly PythonExpression[] };
+  | { readonly kind: "list"; readonly elements: readonly PythonExpression[] }
+  | { readonly kind: "await"; readonly operand: PythonExpression }
+  | {
+      readonly kind: "call-kwargs";
+      readonly callee: PythonExpression;
+      readonly args: readonly PythonExpression[];
+      readonly kwargs: readonly { readonly name: string; readonly value: PythonExpression }[];
+    };
 
 export type PythonTypeAnnotation =
   | { readonly kind: "name"; readonly name: string }
@@ -90,7 +97,44 @@ export type PythonStatement =
       readonly returns?: PythonTypeAnnotation;
       readonly body: readonly PythonStatement[];
       readonly isAsync?: boolean;
+    }
+  | {
+      readonly kind: "class-def";
+      readonly name: string;
+      readonly bases?: readonly string[];
+      readonly decorators?: readonly string[];
+      readonly body: readonly PythonStatement[];
+    }
+  | {
+      // Bare annotated class field: `name: int` (dataclass-style member).
+      readonly kind: "field-decl";
+      readonly name: string;
+      readonly annotation: PythonTypeAnnotation;
+    }
+  | {
+      readonly kind: "attribute-assign";
+      readonly target: PythonExpression;
+      readonly name: string;
+      readonly value: PythonExpression;
+    }
+  | {
+      readonly kind: "tuple-assign";
+      readonly targetNames: readonly string[];
+      readonly value: PythonExpression;
+    }
+  | { readonly kind: "raise"; readonly expression?: PythonExpression }
+  | {
+      readonly kind: "try";
+      readonly body: readonly PythonStatement[];
+      readonly handlers: readonly PythonExceptHandler[];
+      readonly finallyBody?: readonly PythonStatement[];
     };
+
+export interface PythonExceptHandler {
+  readonly exceptionType: string;
+  readonly name?: string;
+  readonly body: readonly PythonStatement[];
+}
 
 export interface PythonModuleModel {
   readonly headerComment: string;

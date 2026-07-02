@@ -37,6 +37,13 @@ to `None`. Integer division and remainder lower to generated module helpers
 shared integer contract — Python's flooring `//` and divisor-signed `%` are
 not equivalent for negative operands; float remainder lowers to `math.fmod`.
 
+Integer range policy: in-range exactness. For operands and results within
+the declared width, generated Python computes the same values as the C# and
+Rust targets. Out-of-range results are exact unbounded integers: Python does
+not wrap. This matches the sibling targets' policy of native sized-integer
+semantics (C# wraps unchecked, Rust panics or wraps by build profile), none
+of which promise a shared overflow behavior.
+
 Naming policy: source names are preserved verbatim when they are valid Python
 identifiers (no silent PEP 8 renaming of public APIs); reserved names on
 locals mangle deterministically with a trailing underscore; reserved public

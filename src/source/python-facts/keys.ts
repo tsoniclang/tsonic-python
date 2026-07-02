@@ -57,6 +57,59 @@ export type PythonTargetOperationFact =
       readonly kind: "for-of";
       readonly operationId: string;
       readonly elementCarrier: TargetTypeRef;
+    }
+  | {
+      // Member access on a project-source class instance.
+      readonly kind: "source-field";
+      readonly operationId: string;
+      readonly name: string;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      // Method call on a project-source class instance.
+      readonly kind: "source-method";
+      readonly operationId: string;
+      readonly name: string;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      // Static method call on a project-source class.
+      readonly kind: "source-static-method";
+      readonly operationId: string;
+      readonly name: string;
+      readonly typeCarrier: TargetTypeRef;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      // new C(...) on a project-source class.
+      readonly kind: "source-constructor";
+      readonly operationId: string;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      // Enum member access on a project-source enum.
+      readonly kind: "source-enum-member";
+      readonly operationId: string;
+      readonly name: string;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      // Object literal lowering to a generated record class: field order and
+      // carriers come from the finalized shape declaration.
+      readonly kind: "record-literal";
+      readonly operationId: string;
+      readonly resultCarrier: TargetTypeRef;
+      readonly fieldNames: readonly string[];
+    }
+  | {
+      // `throw new Error(message)` lowering under the selected error policy.
+      readonly kind: "throw-op";
+      readonly operationId: string;
+    }
+  | {
+      readonly kind: "await-op";
+      readonly operationId: string;
+      readonly resultCarrier: TargetTypeRef;
     };
 
 function pythonTargetOperationFactEquals(left: PythonTargetOperationFact, right: PythonTargetOperationFact): boolean {
@@ -68,3 +121,31 @@ export const pythonTargetOperationFactKey: ExtensionFactKey<PythonTargetOperatio
   name: "targetOperation",
   equals: pythonTargetOperationFactEquals,
 });
+
+// Async declarations lower to async def; awaited operations require await-op
+// facts recorded on the await expression.
+export const pythonAsyncFunctionFactKey: ExtensionFactKey<{ readonly isAsync: true }> = defineExtensionFactKey({
+  extensionId: pythonExtensionId,
+  name: "asyncFunction",
+  equals: () => true,
+});
+
+// Carrier for a project-source declared type (class, enum, or record shape).
+// The backend renders it against the module map derived from the same source
+// files.
+export interface PythonSourceTypeCarrierValue {
+  readonly fileName: string;
+  readonly typeName: string;
+  readonly shape: "class" | "enum" | "record";
+}
+
+export function pythonSourceTypeCarrier(fileName: string, typeName: string, shape: PythonSourceTypeCarrierValue["shape"]): TargetTypeRef {
+  return { kind: "target-specific", target: "python", name: "source-type", value: { fileName, typeName, shape } };
+}
+
+export function pythonSourceTypeCarrierValue(carrier: TargetTypeRef | undefined): PythonSourceTypeCarrierValue | undefined {
+  if (carrier?.kind !== "target-specific" || carrier.target !== "python" || carrier.name !== "source-type") {
+    return undefined;
+  }
+  return carrier.value as PythonSourceTypeCarrierValue;
+}

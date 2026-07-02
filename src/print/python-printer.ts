@@ -20,7 +20,7 @@ export function printPythonModule(module: PythonModuleModel): string {
   for (const statement of module.statements) {
     if (previous === undefined) {
       lines.push("");
-    } else if (statement.kind === "function-def" || previous.kind === "function-def") {
+    } else if (isTopLevelDefinition(statement) || isTopLevelDefinition(previous)) {
       lines.push("", "");
     }
     lines.push(...printStatementLines(statement, 0));
@@ -31,6 +31,28 @@ export function printPythonModule(module: PythonModuleModel): string {
 
 export function printPythonStatement(statement: PythonStatement): string {
   return printStatementLines(statement, 0).join("\n");
+}
+
+function isTopLevelDefinition(statement: PythonStatement): boolean {
+  return statement.kind === "function-def" || statement.kind === "class-def";
+}
+
+// Class bodies separate member definitions with one blank line (black
+// style); simple field declarations stay adjacent.
+function printClassBody(body: readonly PythonStatement[], depth: number): readonly string[] {
+  if (body.length === 0) {
+    return failUnsupportedPythonSyntax({ kind: "<empty-class-body>" }, "statement");
+  }
+  const lines: string[] = [];
+  let previous: PythonStatement | undefined;
+  for (const statement of body) {
+    if (previous !== undefined && (statement.kind === "function-def" || previous.kind === "function-def")) {
+      lines.push("");
+    }
+    lines.push(...printStatementLines(statement, depth));
+    previous = statement;
+  }
+  return lines;
 }
 
 function printBlock(body: readonly PythonStatement[], depth: number): readonly string[] {
@@ -112,6 +134,48 @@ function printStatementLines(statement: PythonStatement, depth: number): readonl
         ...printBlock(statement.body, depth + 1),
       ];
     }
+    case "class-def": {
+      const bases = statement.bases === undefined || statement.bases.length === 0
+        ? ""
+        : `(${statement.bases.join(", ")})`;
+      return [
+        ...(statement.decorators ?? []).map((decorator) => `${indent}@${decorator}`),
+        `${indent}class ${statement.name}${bases}:`,
+        ...printClassBody(statement.body, depth + 1),
+      ];
+    }
+    case "field-decl":
+      return [`${indent}${statement.name}: ${printPythonTypeAnnotation(statement.annotation)}`];
+    case "attribute-assign":
+      return [
+        `${indent}${printOperand(statement.target, PythonPrecedence.Primary)}.${statement.name} = ${printPythonExpression(statement.value)}`,
+      ];
+    case "tuple-assign": {
+      if (statement.targetNames.length < 2) {
+        return failUnsupportedPythonSyntax(statement, "statement");
+      }
+      return [`${indent}${statement.targetNames.join(", ")} = ${printPythonExpression(statement.value)}`];
+    }
+    case "raise":
+      return [
+        statement.expression === undefined
+          ? `${indent}raise`
+          : `${indent}raise ${printPythonExpression(statement.expression)}`,
+      ];
+    case "try": {
+      if (statement.handlers.length === 0 && statement.finallyBody === undefined) {
+        return failUnsupportedPythonSyntax(statement, "statement");
+      }
+      const lines = [`${indent}try:`, ...printBlock(statement.body, depth + 1)];
+      for (const handler of statement.handlers) {
+        const binding = handler.name === undefined ? "" : ` as ${handler.name}`;
+        lines.push(`${indent}except ${handler.exceptionType}${binding}:`, ...printBlock(handler.body, depth + 1));
+      }
+      if (statement.finallyBody !== undefined) {
+        lines.push(`${indent}finally:`, ...printBlock(statement.finallyBody, depth + 1));
+      }
+      return lines;
+    }
     default:
       return failUnsupportedPythonSyntax(statement, "statement");
   }
@@ -173,8 +237,11 @@ function expressionPrecedence(expression: PythonExpression): PythonPrecedence {
       return expression.operator === "not" ? PythonPrecedence.Not : PythonPrecedence.Unary;
     case "attribute":
     case "call":
+    case "call-kwargs":
     case "subscript":
       return PythonPrecedence.Primary;
+    case "await":
+      return PythonPrecedence.Unary;
     default:
       return PythonPrecedence.Atom;
   }
@@ -202,6 +269,15 @@ export function printPythonExpression(expression: PythonExpression): string {
       return `${printOperand(expression.value, PythonPrecedence.Primary)}.${expression.name}`;
     case "call":
       return `${printOperand(expression.callee, PythonPrecedence.Primary)}(${expression.args.map(printPythonExpression).join(", ")})`;
+    case "call-kwargs": {
+      const parts = [
+        ...expression.args.map(printPythonExpression),
+        ...expression.kwargs.map((entry) => `${entry.name}=${printPythonExpression(entry.value)}`),
+      ];
+      return `${printOperand(expression.callee, PythonPrecedence.Primary)}(${parts.join(", ")})`;
+    }
+    case "await":
+      return `await ${printOperand(expression.operand, PythonPrecedence.Unary)}`;
     case "subscript":
       return `${printOperand(expression.value, PythonPrecedence.Primary)}[${printPythonExpression(expression.index)}]`;
     case "list":
