@@ -12,27 +12,58 @@
 .env.*
 !.env.example
 
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python test, lint, and type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+.pyre/
+.pytype/
+.hypothesis/
+.tox/
+.nox/
+
+# Python coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+__pypackages__/
+
+# Python packaging artifacts
+/build/
+/dist/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+*.whl
+*.tar.gz
+
+# Python native extension artifacts
+*.so
+*.pyd
+*.dylib
+
+# Python docs/build outputs
+/site/
+
 # JavaScript/TypeScript package artifacts
 node_modules/
-/dist/
 *.tsbuildinfo
 .npm/
 .pnpm-store/
 *.tgz
-
-# Python artifacts
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-.venv/
-venv/
-/build/
-*.egg-info/
-*.whl
 
 # Native build artifacts
 /target/
