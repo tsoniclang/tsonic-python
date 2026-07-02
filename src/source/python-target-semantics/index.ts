@@ -1965,6 +1965,7 @@ function providerOperationTargetText(target: PythonProviderOperationForm): strin
     case "method":
     case "property":
     case "static-attribute":
+    case "static-method":
     case "builtin-call": {
       return target.name;
     }

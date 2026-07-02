@@ -371,6 +371,13 @@ function planProviderOperationExpression(
       }
       return { kind: "attribute", value: importBindingExpression(context, form.import), name: form.name };
     }
+    case "static-method": {
+      return {
+        kind: "call",
+        callee: { kind: "attribute", value: importBindingExpression(context, form.import), name: form.name },
+        args,
+      };
+    }
     case "index": {
       const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
       const index = args[0];
