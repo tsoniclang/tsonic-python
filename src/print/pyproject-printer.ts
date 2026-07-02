@@ -7,6 +7,10 @@ const ruffTargetVersionByPythonVersion = {
 
 export function printPyprojectManifest(manifest: PyprojectManifestPlan): string {
   const lines: string[] = [
+    "[build-system]",
+    'requires = ["hatchling"]',
+    'build-backend = "hatchling.build"',
+    "",
     "[project]",
     `name = ${tomlString(manifest.packageName)}`,
     'version = "0.1.0"',

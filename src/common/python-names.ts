@@ -21,8 +21,26 @@ export const pythonReservedIdentifiers: ReadonlySet<string> = new Set([
   "__init__", "__main__",
 ]);
 
-const pythonIdentifierPattern = /^[a-z_][a-z0-9_]*$/u;
+const pythonModuleNamePattern = /^[a-z_][a-z0-9_]*$/u;
 
 export function isValidPythonModuleName(name: string): boolean {
+  return pythonModuleNamePattern.test(name) && !pythonReservedIdentifiers.has(name);
+}
+
+// Naming policy: source names are preserved when they are already valid
+// Python identifiers (no silent PEP 8 renaming of public APIs). Reserved
+// names on local bindings mangle deterministically with a trailing
+// underscore; the planner fails closed on any post-mangling collision.
+const pythonIdentifierPattern = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+
+export function isValidPythonIdentifier(name: string): boolean {
   return pythonIdentifierPattern.test(name) && !pythonReservedIdentifiers.has(name);
+}
+
+export function isPythonReservedIdentifier(name: string): boolean {
+  return pythonReservedIdentifiers.has(name);
+}
+
+export function manglePythonReservedName(name: string): string {
+  return `${name}_`;
 }

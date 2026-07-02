@@ -1,8 +1,10 @@
 // Deterministic Python printer. Output for the supported subset must stay
 // stable byte-for-byte: 4-space indentation, no trailing whitespace, black
-// style blank-line separation for top-level definitions, trailing newline.
+// style blank-line separation for top-level definitions, minimal stable
+// parenthesization from a fixed precedence table, trailing newline.
 
 import type {
+  PythonBinaryOperator,
   PythonExpression,
   PythonModuleModel,
   PythonParameter,
@@ -29,6 +31,17 @@ export function printPythonModule(module: PythonModuleModel): string {
 
 export function printPythonStatement(statement: PythonStatement): string {
   return printStatementLines(statement, 0).join("\n");
+}
+
+function printBlock(body: readonly PythonStatement[], depth: number): readonly string[] {
+  if (body.length === 0) {
+    return failUnsupportedPythonSyntax({ kind: "<empty-block>" }, "statement");
+  }
+  const lines: string[] = [];
+  for (const child of body) {
+    lines.push(...printStatementLines(child, depth));
+  }
+  return lines;
 }
 
 function printStatementLines(statement: PythonStatement, depth: number): readonly string[] {
@@ -59,18 +72,45 @@ function printStatementLines(statement: PythonStatement, depth: number): readonl
       const annotation = statement.annotation === undefined ? "" : `: ${printPythonTypeAnnotation(statement.annotation)}`;
       return [`${indent}${statement.targetName}${annotation} = ${printPythonExpression(statement.value)}`];
     }
-    case "function-def": {
-      if (statement.body.length === 0) {
-        return failUnsupportedPythonSyntax(statement, "statement");
+    case "subscript-assign":
+      return [
+        `${indent}${printOperand(statement.target, PythonPrecedence.Primary)}[${printPythonExpression(statement.index)}] = ${printPythonExpression(statement.value)}`,
+      ];
+    case "if": {
+      const lines = [
+        `${indent}if ${printPythonExpression(statement.condition)}:`,
+        ...printBlock(statement.body, depth + 1),
+      ];
+      if (statement.orelse !== undefined && statement.orelse.length > 0) {
+        // Collapse `else: if ...` chains into elif for stable black-style
+        // output.
+        if (statement.orelse.length === 1 && statement.orelse[0]?.kind === "if") {
+          const chained = printStatementLines(statement.orelse[0], depth);
+          lines.push(`${indent}el${chained[0]?.slice(indent.length) ?? ""}`, ...chained.slice(1));
+        } else {
+          lines.push(`${indent}else:`, ...printBlock(statement.orelse, depth + 1));
+        }
       }
+      return lines;
+    }
+    case "while":
+      return [
+        `${indent}while ${printPythonExpression(statement.condition)}:`,
+        ...printBlock(statement.body, depth + 1),
+      ];
+    case "for":
+      return [
+        `${indent}for ${statement.targetName} in ${printPythonExpression(statement.iterable)}:`,
+        ...printBlock(statement.body, depth + 1),
+      ];
+    case "function-def": {
       const params = statement.params.map(printParameter).join(", ");
       const returns = statement.returns === undefined ? "" : ` -> ${printPythonTypeAnnotation(statement.returns)}`;
       const keyword = statement.isAsync === true ? "async def" : "def";
-      const lines = [`${indent}${keyword} ${statement.name}(${params})${returns}:`];
-      for (const child of statement.body) {
-        lines.push(...printStatementLines(child, depth + 1));
-      }
-      return lines;
+      return [
+        `${indent}${keyword} ${statement.name}(${params})${returns}:`,
+        ...printBlock(statement.body, depth + 1),
+      ];
     }
     default:
       return failUnsupportedPythonSyntax(statement, "statement");
@@ -87,11 +127,62 @@ export function printPythonTypeAnnotation(annotation: PythonTypeAnnotation): str
   switch (annotation.kind) {
     case "name":
       return annotation.name;
+    case "subscript":
+      return `${annotation.name}[${annotation.arguments.map(printPythonTypeAnnotation).join(", ")}]`;
     case "none":
       return "None";
     default:
       return failUnsupportedPythonSyntax(annotation, "type annotation");
   }
+}
+
+const enum PythonPrecedence {
+  Or = 1,
+  And = 2,
+  Not = 3,
+  Comparison = 4,
+  Additive = 5,
+  Multiplicative = 6,
+  Unary = 7,
+  Primary = 8,
+  Atom = 9,
+}
+
+const binaryOperatorPrecedence: Readonly<Record<PythonBinaryOperator, PythonPrecedence>> = {
+  or: PythonPrecedence.Or,
+  and: PythonPrecedence.And,
+  "==": PythonPrecedence.Comparison,
+  "!=": PythonPrecedence.Comparison,
+  "<": PythonPrecedence.Comparison,
+  "<=": PythonPrecedence.Comparison,
+  ">": PythonPrecedence.Comparison,
+  ">=": PythonPrecedence.Comparison,
+  "+": PythonPrecedence.Additive,
+  "-": PythonPrecedence.Additive,
+  "*": PythonPrecedence.Multiplicative,
+  "/": PythonPrecedence.Multiplicative,
+  "//": PythonPrecedence.Multiplicative,
+  "%": PythonPrecedence.Multiplicative,
+};
+
+function expressionPrecedence(expression: PythonExpression): PythonPrecedence {
+  switch (expression.kind) {
+    case "binary":
+      return binaryOperatorPrecedence[expression.operator];
+    case "unary":
+      return expression.operator === "not" ? PythonPrecedence.Not : PythonPrecedence.Unary;
+    case "attribute":
+    case "call":
+    case "subscript":
+      return PythonPrecedence.Primary;
+    default:
+      return PythonPrecedence.Atom;
+  }
+}
+
+function printOperand(expression: PythonExpression, minimum: PythonPrecedence): string {
+  const text = printPythonExpression(expression);
+  return expressionPrecedence(expression) < minimum ? `(${text})` : text;
 }
 
 export function printPythonExpression(expression: PythonExpression): string {
@@ -108,9 +199,33 @@ export function printPythonExpression(expression: PythonExpression): string {
     case "name":
       return expression.name;
     case "attribute":
-      return `${printPythonExpression(expression.value)}.${expression.name}`;
+      return `${printOperand(expression.value, PythonPrecedence.Primary)}.${expression.name}`;
     case "call":
-      return `${printPythonExpression(expression.callee)}(${expression.args.map(printPythonExpression).join(", ")})`;
+      return `${printOperand(expression.callee, PythonPrecedence.Primary)}(${expression.args.map(printPythonExpression).join(", ")})`;
+    case "subscript":
+      return `${printOperand(expression.value, PythonPrecedence.Primary)}[${printPythonExpression(expression.index)}]`;
+    case "list":
+      return `[${expression.elements.map(printPythonExpression).join(", ")}]`;
+    case "binary": {
+      const precedence = binaryOperatorPrecedence[expression.operator];
+      // Comparisons are non-associative in this model; both sides parenthesize
+      // at equal precedence to avoid accidental chained comparisons. Other
+      // binary operators are left-associative.
+      const rightMinimum = precedence === PythonPrecedence.Comparison
+        ? PythonPrecedence.Comparison + 1
+        : precedence + 1;
+      const leftMinimum = precedence === PythonPrecedence.Comparison
+        ? PythonPrecedence.Comparison + 1
+        : precedence;
+      return `${printOperand(expression.left, leftMinimum)} ${expression.operator} ${printOperand(expression.right, rightMinimum)}`;
+    }
+    case "unary": {
+      const operand = printOperand(
+        expression.operand,
+        expression.operator === "not" ? PythonPrecedence.Not : PythonPrecedence.Unary,
+      );
+      return expression.operator === "not" ? `not ${operand}` : `-${operand}`;
+    }
     default:
       return failUnsupportedPythonSyntax(expression, "expression");
   }

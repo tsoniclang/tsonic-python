@@ -1,6 +1,24 @@
 // Structured Python output model. The printer is the only component that
 // turns these nodes into text; the planner never concatenates Python source.
 
+export type PythonBinaryOperator =
+  | "+"
+  | "-"
+  | "*"
+  | "/"
+  | "//"
+  | "%"
+  | "=="
+  | "!="
+  | "<"
+  | "<="
+  | ">"
+  | ">="
+  | "and"
+  | "or";
+
+export type PythonUnaryOperator = "-" | "not";
+
 export type PythonExpression =
   | { readonly kind: "int-literal"; readonly text: string }
   | { readonly kind: "float-literal"; readonly text: string }
@@ -9,10 +27,15 @@ export type PythonExpression =
   | { readonly kind: "none-literal" }
   | { readonly kind: "name"; readonly name: string }
   | { readonly kind: "attribute"; readonly value: PythonExpression; readonly name: string }
-  | { readonly kind: "call"; readonly callee: PythonExpression; readonly args: readonly PythonExpression[] };
+  | { readonly kind: "call"; readonly callee: PythonExpression; readonly args: readonly PythonExpression[] }
+  | { readonly kind: "binary"; readonly operator: PythonBinaryOperator; readonly left: PythonExpression; readonly right: PythonExpression }
+  | { readonly kind: "unary"; readonly operator: PythonUnaryOperator; readonly operand: PythonExpression }
+  | { readonly kind: "subscript"; readonly value: PythonExpression; readonly index: PythonExpression }
+  | { readonly kind: "list"; readonly elements: readonly PythonExpression[] };
 
 export type PythonTypeAnnotation =
   | { readonly kind: "name"; readonly name: string }
+  | { readonly kind: "subscript"; readonly name: string; readonly arguments: readonly PythonTypeAnnotation[] }
   | { readonly kind: "none" };
 
 export interface PythonParameter {
@@ -36,6 +59,29 @@ export type PythonStatement =
       readonly targetName: string;
       readonly annotation?: PythonTypeAnnotation;
       readonly value: PythonExpression;
+    }
+  | {
+      readonly kind: "subscript-assign";
+      readonly target: PythonExpression;
+      readonly index: PythonExpression;
+      readonly value: PythonExpression;
+    }
+  | {
+      readonly kind: "if";
+      readonly condition: PythonExpression;
+      readonly body: readonly PythonStatement[];
+      readonly orelse?: readonly PythonStatement[];
+    }
+  | {
+      readonly kind: "while";
+      readonly condition: PythonExpression;
+      readonly body: readonly PythonStatement[];
+    }
+  | {
+      readonly kind: "for";
+      readonly targetName: string;
+      readonly iterable: PythonExpression;
+      readonly body: readonly PythonStatement[];
     }
   | {
       readonly kind: "function-def";
