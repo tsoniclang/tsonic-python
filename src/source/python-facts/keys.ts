@@ -4,7 +4,7 @@ import type { ExtensionFactKey, TargetTypeRef } from "@tsonic/tsts";
 export const pythonExtensionId = "tsonic.python";
 
 // Python import binding for a mapped operation. The module/name values come
-// from metadata rows (target capabilitys), never from source spelling.
+// from metadata rows (target capabilities), never from source spelling.
 export type PythonImportBinding =
   | { readonly style: "from"; readonly module: string; readonly name: string }
   | { readonly style: "module"; readonly module: string; readonly name?: string };

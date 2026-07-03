@@ -1,0 +1,16 @@
+{
+  "name": "@acme/tsonic-python-files",
+  "version": "1.0.0",
+  "description": "Fake installed Python capability plugin for tsonic-python tests",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "tsonic": {
+    "kind": "plugin",
+    "contractVersion": 1,
+    "entry": "."
+  }
+}

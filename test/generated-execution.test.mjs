@@ -621,6 +621,52 @@ export function bounds(values: int32[], needle: int32): int32 {
   assert.match(run.stdout, /EXPANSION-OK/u);
 });
 
+test("typed JSON round-trips through generated Python", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import { dumps } from "@python/json";
+import type { int32 } from "@tsonic/core/types.js";
+
+export function encodeTable(): string {
+  const table: Record<string, int32> = { alpha: 1, beta: 2 };
+  return dumps(table);
+}
+
+export function encodeReading(value: string | null): string {
+  return dumps(value);
+}
+
+export function encodePair(): string {
+  const pair: [string, int32] = ["level", 9];
+  return dumps(pair);
+}
+`,
+    },
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_json", result.artifacts);
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "import json",
+    "",
+    "from tsonic_generated.index import encodePair, encodeReading, encodeTable",
+    "",
+    'assert json.loads(encodeTable()) == {"alpha": 1, "beta": 2}',
+    'assert json.loads(encodeReading(None)) is None',
+    'assert json.loads(encodeReading("live")) == "live"',
+    'assert json.loads(encodePair()) == ["level", 9]',
+    'print("JSON-ROUNDTRIP-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
+  assert.match(run.stdout, /JSON-ROUNDTRIP-OK/u);
+});
+
 test("generated modules parse under the python ast module", () => {
   const { result } = compilePython({
     files: {

@@ -25,9 +25,17 @@ export interface PythonHostModuleContribution {
   readonly text: string;
 }
 
+export interface PythonHostWrapperExport {
+  readonly module: string;
+  readonly name: string;
+}
+
 export interface PythonHostArtifactContribution {
   readonly modules: readonly PythonHostModuleContribution[];
   readonly dependencies: readonly PythonDependency[];
+  // Launch wrappers re-exported from kernel modules through the kernels
+  // package __init__ so hosts can import them without knowing module paths.
+  readonly wrapperExports?: readonly PythonHostWrapperExport[];
 }
 
 export interface PythonHostArtifactInput {
@@ -67,6 +75,7 @@ export function mergePythonHostArtifacts(input: PythonHostArtifactInput): Target
   const seenModuleNames = new Set<string>();
   const kernelArtifacts: TargetSourceFile[] = [];
   const contributedReferences: TargetRuntimeReference[] = [];
+  const wrapperExports = new Map<string, string>();
 
   for (const contribution of contributions) {
     for (const module of contribution.modules) {
@@ -109,6 +118,31 @@ export function mergePythonHostArtifacts(input: PythonHostArtifactInput): Target
         ...(dependency.version === undefined ? {} : { version: dependency.version }),
       });
     }
+    for (const wrapper of contribution.wrapperExports ?? []) {
+      if (!isValidPythonModuleName(wrapper.name)) {
+        diagnostics.push(unsupportedHostRequestDiagnostic(
+          `Host wrapper export '${wrapper.name}' is not a valid Python identifier.`,
+          [`host.wrapper=${wrapper.name}`],
+        ));
+        continue;
+      }
+      if (wrapperExports.has(wrapper.name)) {
+        diagnostics.push(unsupportedHostRequestDiagnostic(
+          `Host wrapper export '${wrapper.name}' is contributed more than once.`,
+          [`host.wrapper=${wrapper.name}`],
+        ));
+        continue;
+      }
+      wrapperExports.set(wrapper.name, wrapper.module);
+    }
+  }
+  for (const [wrapperName, wrapperModule] of wrapperExports) {
+    if (!seenModuleNames.has(wrapperModule)) {
+      diagnostics.push(unsupportedHostRequestDiagnostic(
+        `Host wrapper export '${wrapperName}' references module '${wrapperModule}', which was not contributed.`,
+        [`host.wrapper=${wrapperName}`, `host.module=${wrapperModule}`],
+      ));
+    }
   }
 
   const manifestPlan = planPyprojectManifest(input.target, [...input.runtimeReferences, ...contributedReferences]);
@@ -130,7 +164,15 @@ export function mergePythonHostArtifacts(input: PythonHostArtifactInput): Target
       kind: "source",
       language: "python",
       path: `${kernelRoot}/__init__.py`,
-      text: printPythonModule(createPythonModule([])),
+      text: printPythonModule(createPythonModule(
+        [...wrapperExports.entries()]
+          .sort(([left], [right]) => left.localeCompare(right, "en"))
+          .map(([wrapperName, wrapperModule]) => ({
+            kind: "from-import",
+            module: `.${wrapperModule}`,
+            names: [{ name: wrapperName }],
+          })),
+      )),
     } satisfies TargetSourceFile,
     ...sortedKernels,
   ];

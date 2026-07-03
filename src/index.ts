@@ -39,10 +39,13 @@ export {
 export { printPyprojectManifest } from "./print/pyproject-printer.js";
 export * from "./source/capabilities/stdlib.js";
 export { mergePythonHostArtifacts } from "./backend/host-artifacts.js";
+export { createPythonGpuHostIntegration } from "./backend/gpu-host.js";
+export type { PythonGpuHostOptions } from "./backend/gpu-host.js";
 export type {
   PythonHostArtifactContribution,
   PythonHostArtifactInput,
   PythonHostModuleContribution,
+  PythonHostWrapperExport,
 } from "./backend/host-artifacts.js";
 export { createPythonToolchain } from "./toolchain/python-toolchain.js";
 export { createPythonTargetSemanticsExtension, pythonTargetSemanticsExtensionId, recordPythonFactsBeforeFinalization } from "./source/python-target-semantics/index.js";

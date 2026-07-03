@@ -15,6 +15,26 @@ import { createPythonToolchain } from "../toolchain/python-toolchain.js";
 
 export const pythonTargetId = "python";
 
+// Module ownership must be unambiguous: two installed capabilities (or a
+// capability and the target-owned stdlib) claiming the same specifier would
+// make import resolution order-dependent.
+function rejectDuplicateModuleOwnership(selectedCapabilities: readonly { readonly id: string; readonly moduleOwnership: readonly { readonly specifierPrefix: string }[] }[]): void {
+  const owners = new Map<string, string>();
+  const claims = [
+    ...createPythonStdlibCapabilities().map((capability) => ({ id: capability.id, moduleOwnership: capability.moduleOwnership })),
+    ...selectedCapabilities,
+  ];
+  for (const capability of claims) {
+    for (const entry of capability.moduleOwnership) {
+      const existing = owners.get(entry.specifierPrefix);
+      if (existing !== undefined && existing !== capability.id) {
+        throw new Error(`Python capability '${capability.id}' claims module '${entry.specifierPrefix}', already owned by '${existing}'.`);
+      }
+      owners.set(entry.specifierPrefix, capability.id);
+    }
+  }
+}
+
 export function createPythonTargetPack(): TargetPack {
   return {
     id: pythonTargetId,
@@ -29,6 +49,7 @@ export function createPythonTargetPack(): TargetPack {
       moduleOwnership: createPythonStdlibCapabilities().flatMap((capability) => capability.moduleOwnership),
       createExtensions(context: TargetProviderContext): readonly CompilerExtension[] {
         validatePythonTargetOptions(context.target);
+        rejectDuplicateModuleOwnership(context.selectedCapabilities);
         return [
           ...createPythonStdlibCapabilities().flatMap((capability) =>
             capability.createExtensions({

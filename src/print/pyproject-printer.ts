@@ -24,7 +24,9 @@ export function printPyprojectManifest(manifest: PyprojectManifestPlan): string 
     for (const dependency of manifest.dependencies) {
       const requirement = dependency.version === undefined
         ? dependency.name
-        : `${dependency.name}==${dependency.version}`;
+        : /^[0-9]/u.test(dependency.version)
+          ? `${dependency.name}==${dependency.version}`
+          : `${dependency.name}${dependency.version}`;
       lines.push(`    ${tomlString(requirement)},`);
     }
     lines.push("]");

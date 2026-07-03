@@ -11,9 +11,9 @@ import {
   createPythonSysCapability,
 } from "../dist/source/capabilities/stdlib.js";
 
-test("stdlib target capabilitys create with unique ids and no dependencies", () => {
+test("stdlib target capabilities create with unique ids and no dependencies", () => {
   const packages = createPythonStdlibCapabilities();
-  assert.equal(packages.length, 6);
+  assert.equal(packages.length, 7);
   const ids = packages.map((providerPackage) => providerPackage.id);
   assert.deepEqual(ids, [
     "python-math",
@@ -22,6 +22,7 @@ test("stdlib target capabilitys create with unique ids and no dependencies", () 
     "python-sys",
     "python-datetime",
     "python-asyncio",
+    "python-json",
   ]);
   assert.equal(new Set(ids).size, ids.length);
   for (const providerPackage of packages) {
