@@ -55,7 +55,7 @@ export type PythonTargetOperationFact =
   | {
       readonly kind: "array-literal";
       readonly operationId: string;
-      readonly lane: "dense";
+      readonly lane: "dense" | "sparse";
       readonly elementCarrier: TargetTypeRef;
       readonly resultCarrier: TargetTypeRef;
       readonly length: number;

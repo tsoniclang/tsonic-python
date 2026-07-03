@@ -10,6 +10,12 @@ export const pythonStrTargetId = "python.str";
 export const pythonExceptionTargetId = "python.Exception";
 export const pythonOptionalTargetId = "python.Optional";
 export const pythonDictTargetId = "python.dict";
+export const pythonJsValueTargetId = "python.js.JsValue";
+export const pythonJsArrayTargetId = "python.js.JsArray";
+export const pythonJsMapTargetId = "python.js.JsMap";
+export const pythonJsSetTargetId = "python.js.JsSet";
+export const pythonJsDateTargetId = "python.js.JsDate";
+export const pythonJsObjectTargetId = "python.js.JsObject";
 
 export function pythonSourcePrimitiveTargetType(kind: SourcePrimitiveKind): TargetTypeRef {
   return { kind: "source-primitive", name: kind };
@@ -171,4 +177,36 @@ export function isPythonJsonSerializableCarrier(carrier: TargetTypeRef | undefin
     return carrier.elements.every((element) => isPythonJsonSerializableCarrier(element));
   }
   return false;
+}
+
+export function pythonJsValueTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsValueTargetId };
+}
+
+export function isPythonJsValueCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && carrier.id === pythonJsValueTargetId;
+}
+
+export function pythonJsArrayTargetType(element: TargetTypeRef): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsArrayTargetId, typeArguments: [element] };
+}
+
+export function isPythonJsArrayCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && carrier.id === pythonJsArrayTargetId;
+}
+
+export function pythonJsMapTargetType(key: TargetTypeRef, value: TargetTypeRef): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsMapTargetId, typeArguments: [key, value] };
+}
+
+export function pythonJsSetTargetType(value: TargetTypeRef): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsSetTargetId, typeArguments: [value] };
+}
+
+export function pythonJsDateTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsDateTargetId };
+}
+
+export function pythonJsObjectTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsObjectTargetId };
 }
