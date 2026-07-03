@@ -49,7 +49,7 @@ identifiers (no silent PEP 8 renaming of public APIs); reserved names on
 locals mangle deterministically with a trailing underscore; reserved public
 names and post-mangling collisions fail closed.
 
-Provider packages: `createPythonProviderPackage` supplies virtual module
+Target capabilities: `createPythonTargetCapability` supplies virtual module
 declarations, selected identity mapping, Python operation rows
 (call/constructor/property/method/static-attribute/indexer with from-import
 or module-attribute rendering), and pyproject dependency rows. Package
@@ -63,6 +63,14 @@ operation rows fail closed. Concrete Python library names live only in
 provider metadata, tests, and package definitions — never in compiler
 branches, which the architecture scanners enforce.
 
+Expansion lanes: template literals with proven str/numeric/bool
+substitutions lower to f-strings; `T | null` lowers to Optional carriers
+(`T | None` annotations, `is None`/`is not None` checks, `None` returns);
+`Record<string, T>` lowers to `dict[str, T]` with literal/read/write lanes;
+TS tuples lower to `tuple[...]` with literal-index reads; dense-list
+`includes`/`indexOf` lower to `in` and the generated `_tsonic_index_of`
+helper for primitive and str element carriers only.
+
 Semantic closure lanes: project-source classes (annotated fields,
 constructor with `self` attribute writes, instance methods, `@staticmethod`
 statics), constant integer enums as `IntEnum` classes with fact-backed member
@@ -75,13 +83,29 @@ reads, C-style `for` loops desugared to `while`, compound assignment and
 `async def`/`await` gated on async lowering facts (calls to async functions
 lower only as await operands).
 
-Stdlib provider packages ship with the pack (`python-math`, `python-pathlib`,
-`python-os`, `python-sys`, `python-datetime`, `python-asyncio`), each exposing
-only closed contracts: module-style calls and constants, a `pathlib.Path`
-class lane (constructor, properties, receiver methods), `datetime.now()` as a
-static-method row, and awaited-only `asyncio.sleep`. `@python/json` is not
-shipped: `loads`/`dumps` traffic in dynamic values with no closed row shape.
-Concrete stdlib names live only in `src/source/provider-packages/stdlib.ts`.
+## Installed plugin architecture
+
+`@tsonic/target-python` is an installed target plugin: `createTsonicPlugin()`
+returns the `TsonicTargetPlugin` contract carrying the target identity; the
+`tsonic` manifest in `package.json` is the generic host discovery shape
+(kind `plugin`, contract version, entry) and only locates this entry point.
+Third-party Python libraries are installed target-capability plugins built
+with `createPythonTargetCapability`: capability identity and module
+ownership live on the plugin object, capability metadata validates at
+creation (identity-proven rows, Python names, receiver types), and
+activation is import-driven. Operation rows are a Python-owned contract
+interpreted only by this target — the generic capability operation mapper is
+not the operation interface.
+
+Stdlib capabilities are target-owned (`python-math`, `python-pathlib`,
+`python-os`, `python-sys`, `python-datetime`, `python-asyncio`): the pack
+provider owns their module bindings, so they are always available without
+configuration selection. Each exposes only closed contracts: module-style
+calls and constants, a `pathlib.Path` class lane (constructor, properties,
+receiver methods), `datetime.now()` as a static-method row, and awaited-only
+`asyncio.sleep`. `@python/json` is not shipped: `loads`/`dumps` traffic in
+dynamic values with no closed row shape. Concrete stdlib names live only in
+`src/source/capabilities/stdlib.ts`.
 
 Generated packages carry a PEP 561 `py.typed` marker. Script output supports
 async entry points: an exported async `main` lowers to a `__main__` that runs
@@ -96,11 +120,12 @@ logic lives in this repository.
 
 Source constructs without a finalized lowering lane fail closed with
 `PYTHON_UNSUPPORTED_AST`/`PYTHON_MISSING_TARGET_FACT` diagnostics and zero
-artifacts. That includes sparse arrays, JS array semantics (`at`, `includes`,
-`.length =`), template literals, class inheritance/generics/accessors,
-string enums, enum ordering comparisons, and the `compat`
-typescript-compatibility mode (which requires the `python-js` runtime
-package and is rejected at option validation).
+artifacts. That includes sparse arrays, JS array semantics on non-primitive
+elements (`at`, `includes`/`indexOf` over object elements, `.length =`),
+template literals with unproven substitutions, class
+inheritance/generics/accessors, string enums, enum ordering comparisons,
+and the `compat` typescript-compatibility mode (which requires the
+`python-js` runtime package and is rejected at option validation).
 
 ## Build and test
 
@@ -120,7 +145,7 @@ The build requires the sibling `tsonic` repository checked out at
   "id": "python",
   "options": {
     "packageName": "tsonic_generated",      // ^[a-z][a-z0-9_]*$
-    "pythonVersion": "3.12",                 // "3.12" | "3.13"
+    "pythonVersion": "3.12",                 // "3.12" | "3.13" | "3.14"
     "outputType": "package",                 // "package" | "script"
     "typescriptCompatibility": "strict-native" // "strict-native" | "compat"
   }

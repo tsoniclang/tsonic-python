@@ -5,20 +5,20 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  acmeAioPackage,
-  acmeFilesPackage,
-  acmeMathPackage,
-  acmePathsPackage,
-  acmePlatformPackage,
+  acmeAioCapability,
+  acmeFilesCapability,
+  acmeMathCapability,
+  acmePathsCapability,
+  acmePlatformCapability,
   compilePython,
   fixturePackagesRoot,
 } from "./helpers/python-session.mjs";
 import {
-  createPythonAsyncioPackage,
-  createPythonMathPackage,
-  createPythonOsPackage,
-  createPythonPathlibPackage,
-} from "../dist/source/provider-packages/stdlib.js";
+  createPythonAsyncioCapability,
+  createPythonMathCapability,
+  createPythonOsCapability,
+  createPythonPathlibCapability,
+} from "../dist/source/capabilities/stdlib.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const generatedRoot = join(repositoryRoot, ".temp", "generated");
@@ -73,7 +73,7 @@ export function describe(path: string): string {
 }
 `,
     },
-    packages: [acmeMathPackage(), acmeFilesPackage(), acmePlatformPackage()],
+    capabilities: [acmeMathCapability(), acmeFilesCapability(), acmePlatformCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -297,7 +297,7 @@ export function rename(path: string, ext: string): string {
 }
 `,
     },
-    packages: [acmePathsPackage()],
+    capabilities: [acmePathsCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -333,7 +333,7 @@ export async function load(key: string): Promise<string> {
 }
 `,
     },
-    packages: [acmeAioPackage()],
+    capabilities: [acmeAioCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -388,7 +388,6 @@ export function here(): string {
 }
 `,
     },
-    packages: [createPythonMathPackage(), createPythonPathlibPackage(), createPythonOsPackage()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -432,7 +431,6 @@ export async function pausedQuadruple(value: int32): Promise<int32> {
 }
 `,
     },
-    packages: [createPythonAsyncioPackage()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -529,6 +527,98 @@ export async function main(): Promise<void> {
     timeout: 20000,
     env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
   });
+});
+
+test("python 3.14 target compiles, imports, and runs under the local 3.14 interpreter", () => {
+  const target = { id: "python", options: { pythonVersion: "3.14", packageName: "py314_proof" } };
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import type { int32 } from "@tsonic/core/types.js";
+
+export function triple(value: int32): int32 {
+  return value * 3;
+}
+`,
+    },
+    target,
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const pyproject = result.artifacts.find((artifact) => artifact.path === "pyproject.toml");
+  assert.match(pyproject.text, /requires-python = ">=3\.14"/u);
+  assert.match(pyproject.text, /target-version = "py314"/u);
+
+  const versionCheck = runPython(["-c", "import sys; assert sys.version_info[:2] >= (3, 14); print(sys.version_info[:2])"]);
+  assert.match(versionCheck.stdout, /\(3, 1[4-9]\)/u);
+
+  const projectRoot = materialize("exec_py314", result.artifacts);
+  runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot });
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "from py314_proof.index import triple",
+    "",
+    "assert triple(14) == 42",
+    'print("PY314-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
+  assert.match(run.stdout, /PY314-OK/u);
+});
+
+test("expansion lanes execute: f-strings, optionals, dicts, tuples, list search", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import type { int32 } from "@tsonic/core/types.js";
+
+export function label(name: string, count: int32): string {
+  return \`\${name}: \${count}\`;
+}
+
+export function fallback(value: string | null): string {
+  if (value === null) {
+    return "none";
+  }
+  return value;
+}
+
+export function bounds(values: int32[], needle: int32): int32 {
+  const table: Record<string, int32> = { low: 1 };
+  table["high"] = 9;
+  const pair: [int32, int32] = [table["low"], table["high"]];
+  if (values.includes(needle)) {
+    return values.indexOf(needle) + pair[0] + pair[1];
+  }
+  return values.indexOf(needle);
+}
+`,
+    },
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_expansion", result.artifacts);
+  runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot });
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "from tsonic_generated.index import bounds, fallback, label",
+    "",
+    'assert label("jobs", 3) == "jobs: 3"',
+    'assert fallback(None) == "none"',
+    'assert fallback("here") == "here"',
+    "assert bounds([4, 5, 6], 5) == 11, bounds([4, 5, 6], 5)",
+    "assert bounds([4, 5, 6], 9) == -1",
+    'print("EXPANSION-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
+  assert.match(run.stdout, /EXPANSION-OK/u);
 });
 
 test("generated modules parse under the python ast module", () => {

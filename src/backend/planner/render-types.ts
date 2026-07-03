@@ -1,9 +1,14 @@
 import type { TargetTypeRef } from "@tsonic/tsts";
 import type { PythonTypeAnnotation } from "../python-ast/nodes.js";
 import {
+  isPythonDictCarrier,
   isPythonListCarrier,
   isPythonNoneCarrier,
+  isPythonOptionalCarrier,
   isPythonStrCarrier,
+  isPythonTupleCarrier,
+  pythonDictValueCarrier,
+  pythonOptionalInnerCarrier,
   pythonPrimitiveTypeName,
 } from "../../source/python-target-types.js";
 import { pythonSourceTypeCarrierValue } from "../../source/python-facts/keys.js";
@@ -31,7 +36,37 @@ export function pythonTypeFromCarrier(carrier: TargetTypeRef | undefined): Pytho
     const element = pythonTypeFromCarrier(carrier.element);
     return element === undefined ? undefined : { kind: "subscript", name: "list", arguments: [element] };
   }
+  if (isPythonOptionalCarrier(carrier)) {
+    const inner = pythonTypeFromCarrier(pythonOptionalInnerCarrier(carrier));
+    return inner === undefined ? undefined : { kind: "optional", inner };
+  }
+  if (isPythonDictCarrier(carrier)) {
+    const value = pythonTypeFromCarrier(pythonDictValueCarrier(carrier));
+    return value === undefined
+      ? undefined
+      : { kind: "subscript", name: "dict", arguments: [{ kind: "name", name: "str" }, value] };
+  }
+  if (isPythonTupleCarrier(carrier)) {
+    return pythonTupleAnnotation(carrier.elements, pythonTypeFromCarrier);
+  }
   return undefined;
+}
+
+// Tuple carriers render as tuple[A, B, ...]; every element must render or the
+// annotation fails closed.
+function pythonTupleAnnotation(
+  elements: readonly TargetTypeRef[],
+  render: (carrier: TargetTypeRef | undefined) => PythonTypeAnnotation | undefined,
+): PythonTypeAnnotation | undefined {
+  const rendered: PythonTypeAnnotation[] = [];
+  for (const element of elements) {
+    const annotation = render(element);
+    if (annotation === undefined) {
+      return undefined;
+    }
+    rendered.push(annotation);
+  }
+  return { kind: "subscript", name: "tuple", arguments: rendered };
 }
 
 // Resolves a project-source declared type carrier to its generated class
@@ -84,6 +119,19 @@ export function pythonTypeFromCarrierInContext(
   if (isPythonListCarrier(carrier)) {
     const element = pythonTypeFromCarrierInContext(carrier.element, context);
     return element === undefined ? undefined : { kind: "subscript", name: "list", arguments: [element] };
+  }
+  if (isPythonOptionalCarrier(carrier)) {
+    const inner = pythonTypeFromCarrierInContext(pythonOptionalInnerCarrier(carrier), context);
+    return inner === undefined ? undefined : { kind: "optional", inner };
+  }
+  if (isPythonDictCarrier(carrier)) {
+    const value = pythonTypeFromCarrierInContext(pythonDictValueCarrier(carrier), context);
+    return value === undefined
+      ? undefined
+      : { kind: "subscript", name: "dict", arguments: [{ kind: "name", name: "str" }, value] };
+  }
+  if (isPythonTupleCarrier(carrier)) {
+    return pythonTupleAnnotation(carrier.elements, (element) => pythonTypeFromCarrierInContext(element, context));
   }
   return pythonTypeFromCarrier(carrier);
 }

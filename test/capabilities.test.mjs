@@ -1,17 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  acmeAioPackage,
-  acmeFilesPackage,
-  acmeMathPackage,
-  acmePathsPackage,
-  acmePlatformPackage,
-  acmeVectorsPackage,
+  acmeAioCapability,
+  acmeFilesCapability,
+  acmeMathCapability,
+  acmePathsCapability,
+  acmePlatformCapability,
+  acmeVectorsCapability,
   artifactText,
   compilePython,
   strCarrier,
 } from "./helpers/python-session.mjs";
-import { createPythonProviderPackage } from "../dist/index.js";
+import { createPythonTargetCapability } from "../dist/index.js";
 
 test("provider free-function call lowers via from-import row metadata", () => {
   const { result } = compilePython({
@@ -24,7 +24,7 @@ export function load(path: string): string {
 }
 `,
     },
-    packages: [acmeFilesPackage()],
+    capabilities: [acmeFilesCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -52,7 +52,7 @@ export function total(a: int32, b: int32): int32 {
 }
 `,
     },
-    packages: [acmeMathPackage()],
+    capabilities: [acmeMathCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -73,7 +73,7 @@ export function home(): string {
 }
 `,
     },
-    packages: [acmePlatformPackage()],
+    capabilities: [acmePlatformCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -97,7 +97,7 @@ export function first(): int32 {
 }
 `,
     },
-    packages: [acmeVectorsPackage()],
+    capabilities: [acmeVectorsCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -119,7 +119,7 @@ export function rename(path: string, ext: string): string {
 }
 `,
     },
-    packages: [acmePathsPackage()],
+    capabilities: [acmePathsCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -142,7 +142,7 @@ export async function load(key: string): Promise<string> {
 }
 `,
     },
-    packages: [acmeAioPackage()],
+    capabilities: [acmeAioCapability()],
   });
   assert.deepEqual(awaited.result.diagnostics, []);
   const text = artifactText(awaited.result, "src/tsonic_generated/index.py");
@@ -161,7 +161,7 @@ export async function load(key: string): Promise<string> {
 }
 `,
     },
-    packages: [acmeAioPackage()],
+    capabilities: [acmeAioCapability()],
   });
   assert.equal(unawaited.result.artifacts.length, 0);
   assert.ok(unawaited.result.diagnostics.length > 0);
@@ -185,7 +185,7 @@ export function use(path: string, a: int32): string {
 }
 `,
     },
-    packages: [acmeFilesPackage(), acmeMathPackage()],
+    capabilities: [acmeFilesCapability(), acmeMathCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -199,7 +199,7 @@ export function use(path: string, a: int32): string {
 });
 
 test("provider exports without operation rows fail closed", () => {
-  const unmappedPackage = createPythonProviderPackage({
+  const unmappedPackage = createPythonTargetCapability({
     id: "acme-unmapped",
     displayName: "Unmapped fake package",
     version: "0.0.1",
@@ -232,7 +232,7 @@ export function probe(): string {
 }
 `,
     },
-    packages: [unmappedPackage],
+    capabilities: [unmappedPackage],
   });
 
   assert.equal(result.artifacts.length, 0);
@@ -278,55 +278,55 @@ const validRow = {
   resultCarrier: strCarrier,
 };
 
-test("provider package creation rejects duplicate operation rows", () => {
+test("target capability creation rejects duplicate operation rows", () => {
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({ operations: [validRow, { ...validRow }] })),
+    () => createPythonTargetCapability(packageDefinition({ operations: [validRow, { ...validRow }] })),
     /duplicate operation row/u,
   );
 });
 
-test("provider package creation rejects invalid Python import and member names", () => {
+test("target capability creation rejects invalid Python import and member names", () => {
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       operations: [{ ...validRow, target: { form: "call", import: { style: "from", module: "acme bad", name: "thing" } } }],
     })),
     /invalid Python module/u,
   );
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       operations: [{ ...validRow, target: { form: "call", import: { style: "from", module: "acme_bad", name: "not a name" } } }],
     })),
     /invalid Python import name/u,
   );
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       operations: [{ ...validRow, operationKind: "property", receiverTypeId: "acme.bad.Thing", target: { form: "property", name: "class" } }],
     })),
     /invalid Python member name/u,
   );
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       operations: [{ ...validRow, target: { form: "static-attribute", import: { style: "module", module: "acme_bad" }, name: "0bad" } }],
     })),
     /invalid Python attribute name/u,
   );
 });
 
-test("provider package creation rejects empty module identities and missing carriers", () => {
+test("target capability creation rejects empty module identities and missing carriers", () => {
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       modules: [{ moduleSpecifier: "", providerModuleId: "acme.bad", exports: [] }],
     })),
     /module specifiers must be non-empty/u,
   );
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       modules: [{ moduleSpecifier: "@acme/bad", providerModuleId: "", exports: [] }],
     })),
     /provider module ids must be non-empty/u,
   );
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       operations: [{ ...validRow, resultCarrier: undefined }],
     })),
     /missing a result carrier/u,
@@ -345,19 +345,19 @@ test("provider metadata fails at creation for structural inconsistencies", () =>
     }],
   };
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       modules: [goodModule, { ...goodModule, providerModuleId: "acme.other" }],
     })),
     /duplicate module specifier/u,
   );
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       modules: [goodModule, { ...goodModule, moduleSpecifier: "@acme/other" }],
     })),
     /duplicate provider module id|duplicate export id/u,
   );
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       operations: [{ ...validRow, exportId: "@acme/bad::ghost" }],
     })),
     /undeclared export/u,
@@ -366,19 +366,19 @@ test("provider metadata fails at creation for structural inconsistencies", () =>
 
 test("row identities must prove against the declaration model", () => {
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       operations: [{ ...validRow, memberId: "@acme/bad::thing.ghost" }],
     })),
     /undeclared member '@acme\/bad::thing\.ghost'/u,
   );
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       operations: [{ ...validRow, signatureId: "@acme/bad::thing(ghost)" }],
     })),
     /undeclared signature '@acme\/bad::thing\(ghost\)'/u,
   );
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       operations: [{
         ...validRow,
         operationKind: "property",
@@ -389,7 +389,7 @@ test("row identities must prove against the declaration model", () => {
     /receiverTypeId 'acme\.bad\.Unknown', which is not a declared target identity/u,
   );
   // Declared identities pass: the export-level signature id validates.
-  const valid = createPythonProviderPackage(packageDefinition({
+  const valid = createPythonTargetCapability(packageDefinition({
     operations: [{ ...validRow, signatureId: "@acme/bad::thing()" }],
   }));
   assert.equal(valid.id, "acme-bad");
@@ -397,13 +397,13 @@ test("row identities must prove against the declaration model", () => {
 
 test("receiver-form rows require a receiverTypeId and isAsync is method-only", () => {
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       operations: [{ ...validRow, operationKind: "property", target: { form: "property", name: "size" } }],
     })),
     /requires a receiverTypeId/u,
   );
   assert.throws(
-    () => createPythonProviderPackage(packageDefinition({
+    () => createPythonTargetCapability(packageDefinition({
       operations: [{ ...validRow, operationKind: "property", isAsync: true, receiverTypeId: "acme.bad.Thing", target: { form: "property", name: "size" } }],
     })),
     /isAsync is supported only on method operations/u,
@@ -411,7 +411,7 @@ test("receiver-form rows require a receiverTypeId and isAsync is method-only", (
 });
 
 test("dotted provider modules are accepted; reserved segments are not member names", () => {
-  const dotted = createPythonProviderPackage(packageDefinition({
+  const dotted = createPythonTargetCapability(packageDefinition({
     operations: [{
       ...validRow,
       target: { form: "call", import: { style: "module", module: "acme_bad.sub_mod", name: "thing" } },

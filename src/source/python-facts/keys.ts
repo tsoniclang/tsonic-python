@@ -4,13 +4,13 @@ import type { ExtensionFactKey, TargetTypeRef } from "@tsonic/tsts";
 export const pythonExtensionId = "tsonic.python";
 
 // Python import binding for a mapped operation. The module/name values come
-// from metadata rows (provider packages), never from source spelling.
+// from metadata rows (target capabilitys), never from source spelling.
 export type PythonImportBinding =
   | { readonly style: "from"; readonly module: string; readonly name: string }
   | { readonly style: "module"; readonly module: string; readonly name?: string };
 
 // Python rendering form for a mapped operation.
-export type PythonProviderOperationForm =
+export type PythonCapabilityOperationForm =
   | { readonly form: "call"; readonly import: PythonImportBinding }
   | { readonly form: "constructor"; readonly import: PythonImportBinding }
   | { readonly form: "method"; readonly name: string }
@@ -31,7 +31,7 @@ export type PythonProviderOperationForm =
       readonly name: string;
     };
 
-export type PythonListOperation = "index-read" | "index-write" | "len" | "append";
+export type PythonListOperation = "index-read" | "index-write" | "len" | "append" | "includes" | "index-of";
 
 export type PythonTargetOperationFact =
   | {
@@ -46,10 +46,10 @@ export type PythonTargetOperationFact =
       readonly resultCarrier: TargetTypeRef;
     }
   | {
-      readonly kind: "provider-operation";
+      readonly kind: "capability-operation";
       readonly operationId: string;
       readonly operationKind: "method" | "constructor" | "property" | "indexer";
-      readonly target: PythonProviderOperationForm;
+      readonly target: PythonCapabilityOperationForm;
       readonly resultCarrier: TargetTypeRef;
     }
   | {
@@ -122,6 +122,38 @@ export type PythonTargetOperationFact =
   | {
       readonly kind: "await-op";
       readonly operationId: string;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      // Template literal whose parts all carry proven str/numeric/bool
+      // carriers: lowers to an f-string.
+      readonly kind: "string-template";
+      readonly operationId: string;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      // Object literal with a proven Record<string, T> carrier: lowers to a
+      // dict literal.
+      readonly kind: "dict-literal";
+      readonly operationId: string;
+      readonly valueCarrier: TargetTypeRef;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      readonly kind: "dict-op";
+      readonly operationId: string;
+      readonly op: "index-read" | "index-write";
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      readonly kind: "tuple-literal";
+      readonly operationId: string;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      readonly kind: "tuple-index";
+      readonly operationId: string;
+      readonly index: number;
       readonly resultCarrier: TargetTypeRef;
     };
 

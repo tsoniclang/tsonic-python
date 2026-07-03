@@ -10,27 +10,37 @@ import {
   KindFalseKeyword,
   KindIdentifier,
   KindNewExpression,
+  KindNoSubstitutionTemplateLiteral,
+  KindNullKeyword,
   KindNumericLiteral,
   KindParenthesizedExpression,
   KindPostfixUnaryExpression,
   KindPrefixUnaryExpression,
   KindPropertyAccessExpression,
   KindStringLiteral,
+  KindTemplateExpression,
+  KindTemplateSpan,
   KindTrueKeyword,
   Node_Expression,
   Node_Initializer,
+  Node_SyntaxField,
   PrefixUnaryExpression_Operand,
   unwrapParenthesized,
 } from "../../common/source-ast.js";
 import { pythonTargetOperationFactKey } from "../../source/python-facts/keys.js";
 import type {
   PythonImportBinding,
-  PythonProviderOperationForm,
+  PythonCapabilityOperationForm,
   PythonTargetOperationFact,
 } from "../../source/python-facts/keys.js";
-import { isPythonFloatCarrier, isPythonIntegerCarrier } from "../../source/python-target-types.js";
+import {
+  isPythonFloatCarrier,
+  isPythonIntegerCarrier,
+  isPythonNoneCarrier,
+  isPythonOptionalCarrier,
+} from "../../source/python-target-types.js";
 import { isValidPythonIdentifier } from "../../common/python-names.js";
-import type { PythonBinaryOperator, PythonExpression, PythonUnaryOperator } from "../python-ast/nodes.js";
+import type { PythonBinaryOperator, PythonExpression, PythonFStringPart, PythonUnaryOperator } from "../python-ast/nodes.js";
 import { missingFactDiagnostic, unsupportedConstructDiagnostic } from "./diagnostics.js";
 import {
   collectFromImport,
@@ -44,7 +54,7 @@ import type { PythonPlanContext } from "./plan-context.js";
 import { pythonSourceTypeName } from "./render-types.js";
 
 const pythonBinaryOperators: ReadonlySet<string> = new Set<PythonBinaryOperator>([
-  "+", "-", "*", "/", "//", "%", "==", "!=", "<", "<=", ">", ">=", "and", "or",
+  "+", "-", "*", "/", "//", "%", "==", "!=", "<", "<=", ">", ">=", "and", "or", "in", "not in", "is", "is not",
 ]);
 
 const pythonUnaryOperators: ReadonlySet<string> = new Set<PythonUnaryOperator>(["-", "not"]);
@@ -119,6 +129,13 @@ export function planExpression(node: Node, context: PythonPlanContext): PythonEx
     }
     case KindFalseKeyword: {
       return { kind: "bool-literal", value: false };
+    }
+    case KindNullKeyword: {
+      return planNullLiteral(node, context);
+    }
+    case KindTemplateExpression:
+    case KindNoSubstitutionTemplateLiteral: {
+      return planTemplateLiteral(node, context);
     }
     case KindIdentifier: {
       return planIdentifier(node, context);
@@ -212,12 +229,152 @@ export function planNumericLiteral(node: Node, context: PythonPlanContext): Pyth
   return undefined;
 }
 
+// `null` lowers to None only when the optional lane proved a carrier for it
+// (a None carrier, or an Optional carrier at an optional-typed position).
+function planNullLiteral(node: Node, context: PythonPlanContext): PythonExpression | undefined {
+  const carrier = expressionCarrier(node, context);
+  if (!isPythonNoneCarrier(carrier) && !isPythonOptionalCarrier(carrier)) {
+    context.diagnostics.push(missingFactDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.literal-carrier",
+      "Null literal has no finalized Python None carrier fact.",
+    ));
+    return undefined;
+  }
+  return { kind: "none-literal" };
+}
+
+// The printer fails closed on f-string fields whose rendered text contains
+// quotes, backslashes, newlines, or braces. Those characters can only come
+// from nested string-literal, f-string, or dict nodes: every other node kind
+// renders from validated identifiers, operator tokens, and numeric text.
+// This structural check keeps the printer throw unreachable from user input.
+function isPrintableFStringField(expression: PythonExpression): boolean {
+  switch (expression.kind) {
+    case "string-literal":
+    case "f-string":
+    case "dict": {
+      return false;
+    }
+    case "attribute": {
+      return isPrintableFStringField(expression.value);
+    }
+    case "call": {
+      return isPrintableFStringField(expression.callee) && expression.args.every(isPrintableFStringField);
+    }
+    case "call-kwargs": {
+      return isPrintableFStringField(expression.callee) &&
+        expression.args.every(isPrintableFStringField) &&
+        expression.kwargs.every((entry) => isPrintableFStringField(entry.value));
+    }
+    case "binary": {
+      return isPrintableFStringField(expression.left) && isPrintableFStringField(expression.right);
+    }
+    case "unary": {
+      return isPrintableFStringField(expression.operand);
+    }
+    case "subscript": {
+      return isPrintableFStringField(expression.value) && isPrintableFStringField(expression.index);
+    }
+    case "list":
+    case "tuple": {
+      return expression.elements.every(isPrintableFStringField);
+    }
+    case "await": {
+      return isPrintableFStringField(expression.operand);
+    }
+    default: {
+      return true;
+    }
+  }
+}
+
+// Template literals lower against the finalized string-template fact.
+// No-substitution templates are plain string literals; substituting templates
+// build f-string parts from the cooked head/middle/tail text fields and the
+// planned substitution expressions. Proven string-literal substitutions
+// inline as literal text, avoiding the printer's fail-closed field rules.
+function planTemplateLiteral(node: Node, context: PythonPlanContext): PythonExpression | undefined {
+  const { ast } = context.input;
+  const fact = pythonOperationFact(node, context);
+  if (fact === undefined || fact.kind !== "string-template") {
+    context.diagnostics.push(missingFactDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.template",
+      "Template literals require a finalized string-template fact.",
+    ));
+    return undefined;
+  }
+  if (ast.kindName(node) === KindNoSubstitutionTemplateLiteral) {
+    return { kind: "string-literal", value: ast.text(node) };
+  }
+  const headNode = Node_SyntaxField(node, "Head");
+  if (headNode === undefined) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.template",
+      "Template expression is missing its head literal.",
+    ));
+    return undefined;
+  }
+  const parts: PythonFStringPart[] = [];
+  const pushText = (text: string): void => {
+    if (text.length > 0) {
+      parts.push({ kind: "text", text });
+    }
+  };
+  pushText(ast.text(headNode));
+  const spans: Node[] = [];
+  ast.forEachChild(node, (child) => {
+    if (child !== undefined && ast.kindName(child) === KindTemplateSpan) {
+      spans.push(child);
+    }
+  });
+  let failed = false;
+  for (const span of spans) {
+    const expressionNode = Node_Expression(span);
+    const literalNode = Node_SyntaxField(span, "Literal");
+    if (expressionNode === undefined || literalNode === undefined) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, span),
+        "python.backend.template",
+        "Template span is missing its expression or literal part.",
+      ));
+      failed = true;
+      continue;
+    }
+    const planned = planExpression(expressionNode, context);
+    if (planned === undefined) {
+      failed = true;
+    } else if (planned.kind === "string-literal") {
+      pushText(planned.value);
+    } else if (isPrintableFStringField(planned)) {
+      parts.push({ kind: "field", expression: planned });
+    } else {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, expressionNode),
+        "python.backend.template",
+        "Template substitution renders text that cannot appear inside an f-string field.",
+      ));
+      failed = true;
+    }
+    pushText(ast.text(literalNode));
+  }
+  if (failed) {
+    return undefined;
+  }
+  if (parts.every((part) => part.kind === "text")) {
+    return { kind: "string-literal", value: parts.map((part) => (part.kind === "text" ? part.text : "")).join("") };
+  }
+  return { kind: "f-string", parts };
+}
+
 function planIdentifier(node: Node, context: PythonPlanContext): PythonExpression | undefined {
   const { ast } = context.input;
   // Identifiers bound to provider operations render from row metadata; a
   // provider-backed identifier must never fall through to a bare name.
   const fact = pythonOperationFact(node, context);
-  if (fact !== undefined && fact.kind === "provider-operation") {
+  if (fact !== undefined && fact.kind === "capability-operation") {
     if (fact.target.form === "static-attribute") {
       return { kind: "attribute", value: importBindingExpression(context, fact.target.import), name: fact.target.name };
     }
@@ -356,7 +513,7 @@ function importBindingExpression(context: PythonPlanContext, binding: PythonImpo
 
 function planProviderOperationExpression(
   context: PythonPlanContext,
-  form: PythonProviderOperationForm,
+  form: PythonCapabilityOperationForm,
   receiverNode: Node | undefined,
   args: readonly PythonExpression[],
 ): PythonExpression | undefined {
@@ -420,28 +577,63 @@ function planCallExpression(node: Node, context: PythonPlanContext): PythonExpre
   const receiverNode = callee !== undefined && ast.kindName(callee) === KindPropertyAccessExpression
     ? Node_Expression(callee)
     : undefined;
-  const fact = pythonOperationFact(node, context);
+  // Defensive fact-subject handling: list operations are recorded on the
+  // call expression; if the semantics pass recorded one on the callee
+  // property access instead, adopt it (list-op facts only).
+  const nodeFact = pythonOperationFact(node, context);
+  const calleeFact = nodeFact !== undefined || callee === undefined ? undefined : pythonOperationFact(callee, context);
+  const fact = nodeFact ?? (calleeFact?.kind === "list-op" ? calleeFact : undefined);
   if (fact !== undefined && fact.kind === "list-op") {
-    if (fact.op !== "append" || receiverNode === undefined) {
+    if (receiverNode === undefined) {
       context.diagnostics.push(unsupportedConstructDiagnostic(
         diagnosticInput(context, node),
         "python.backend.list-op",
-        "List operation is not supported in call position.",
+        "List operation in call position requires a property-access receiver.",
       ));
       return undefined;
     }
-    const receiver = planExpression(receiverNode, context);
-    if (receiver === undefined) {
-      return undefined;
+    if (fact.op === "append") {
+      const receiver = planExpression(receiverNode, context);
+      if (receiver === undefined) {
+        return undefined;
+      }
+      return { kind: "call", callee: { kind: "attribute", value: receiver, name: "append" }, args };
     }
-    return { kind: "call", callee: { kind: "attribute", value: receiver, name: "append" }, args };
+    if (fact.op === "includes" || fact.op === "index-of") {
+      const value = args[0];
+      if (value === undefined || args.length !== 1) {
+        context.diagnostics.push(unsupportedConstructDiagnostic(
+          diagnosticInput(context, node),
+          "python.backend.list-op",
+          "List search operations require exactly one argument.",
+        ));
+        return undefined;
+      }
+      const receiver = planExpression(receiverNode, context);
+      if (receiver === undefined) {
+        return undefined;
+      }
+      if (fact.op === "includes") {
+        return { kind: "binary", operator: "in", left: value, right: receiver };
+      }
+      // JS first-match-or-minus-one semantics live in the generated helper;
+      // Python's list.index raises on a missing element.
+      collectHelper(context, "index-of");
+      return { kind: "call", callee: { kind: "name", name: pythonHelperNames["index-of"] }, args: [receiver, value] };
+    }
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.list-op",
+      "List operation is not supported in call position.",
+    ));
+    return undefined;
   }
-  if (fact !== undefined && fact.kind === "provider-operation") {
+  if (fact !== undefined && fact.kind === "capability-operation") {
     const planned = planProviderOperationExpression(context, fact.target, receiverNode, args);
     if (planned === undefined) {
       context.diagnostics.push(unsupportedConstructDiagnostic(
         diagnosticInput(context, node),
-        "python.provider.call",
+        "python.capability.call",
         "Provider call operation could not be lowered.",
       ));
     }
@@ -538,10 +730,10 @@ function planNewExpression(node: Node, context: PythonPlanContext): PythonExpres
     const args = planArguments(node, context);
     return args === undefined ? undefined : { kind: "call", callee: { kind: "name", name: className }, args };
   }
-  if (fact === undefined || fact.kind !== "provider-operation" || fact.operationKind !== "constructor") {
+  if (fact === undefined || fact.kind !== "capability-operation" || fact.operationKind !== "constructor") {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.constructor",
+      "python.capability.constructor",
       "Constructor expression requires a finalized provider constructor fact.",
     ));
     return undefined;
@@ -554,7 +746,7 @@ function planNewExpression(node: Node, context: PythonPlanContext): PythonExpres
   if (planned === undefined) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.constructor",
+      "python.capability.constructor",
       "Provider constructor operation could not be lowered.",
     ));
   }
@@ -596,10 +788,10 @@ function planPropertyAccess(node: Node, context: PythonPlanContext): PythonExpre
     }
     return { kind: "call", callee: { kind: "name", name: "len" }, args: [receiver] };
   }
-  if (fact === undefined || fact.kind !== "provider-operation") {
+  if (fact === undefined || fact.kind !== "capability-operation") {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.property",
+      "python.capability.property",
       "Property access requires a finalized provider property fact.",
     ));
     return undefined;
@@ -608,7 +800,7 @@ function planPropertyAccess(node: Node, context: PythonPlanContext): PythonExpre
   if (planned === undefined) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.property",
+      "python.capability.property",
       "Provider property operation could not be lowered.",
     ));
   }
@@ -617,20 +809,38 @@ function planPropertyAccess(node: Node, context: PythonPlanContext): PythonExpre
 
 function planElementAccess(node: Node, context: PythonPlanContext): PythonExpression | undefined {
   const fact = pythonOperationFact(node, context);
+  // Tuple element reads take the index from the finalized fact (a proven
+  // numeric literal), never from re-planning the source index expression.
+  if (fact !== undefined && fact.kind === "tuple-index") {
+    if (!Number.isInteger(fact.index) || fact.index < 0) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, node),
+        "python.backend.tuple",
+        "Tuple element access requires a non-negative literal index.",
+      ));
+      return undefined;
+    }
+    const receiverNode = Node_Expression(node);
+    const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
+    return receiver === undefined
+      ? undefined
+      : { kind: "subscript", value: receiver, index: { kind: "int-literal", text: String(fact.index) } };
+  }
   const argumentNode = ElementAccessExpression_ArgumentExpression(node);
   const index = argumentNode === undefined ? undefined : planExpression(argumentNode, context);
   if (index === undefined) {
     return undefined;
   }
-  if (fact !== undefined && fact.kind === "list-op" && fact.op === "index-read") {
+  if (fact !== undefined &&
+    ((fact.kind === "list-op" && fact.op === "index-read") || (fact.kind === "dict-op" && fact.op === "index-read"))) {
     const receiverNode = Node_Expression(node);
     const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
     return receiver === undefined ? undefined : { kind: "subscript", value: receiver, index };
   }
-  if (fact === undefined || fact.kind !== "provider-operation") {
+  if (fact === undefined || fact.kind !== "capability-operation") {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.indexer",
+      "python.capability.indexer",
       "Element access requires a finalized provider indexer fact.",
     ));
     return undefined;
@@ -639,7 +849,7 @@ function planElementAccess(node: Node, context: PythonPlanContext): PythonExpres
   if (planned === undefined) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.indexer",
+      "python.capability.indexer",
       "Provider indexer operation could not be lowered.",
     ));
   }
@@ -648,11 +858,12 @@ function planElementAccess(node: Node, context: PythonPlanContext): PythonExpres
 
 export function planArrayLiteral(node: Node, context: PythonPlanContext): PythonExpression | undefined {
   const fact = pythonOperationFact(node, context);
-  if (fact === undefined || fact.kind !== "array-literal" || fact.lane !== "dense") {
+  const isTupleLiteral = fact !== undefined && fact.kind === "tuple-literal";
+  if (!isTupleLiteral && (fact === undefined || fact.kind !== "array-literal" || fact.lane !== "dense")) {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
       "python.backend.array-literal",
-      "Array literals require a finalized Python dense list lane fact.",
+      "Array literals require a finalized Python dense list or tuple lane fact.",
     ));
     return undefined;
   }
@@ -667,7 +878,17 @@ export function planArrayLiteral(node: Node, context: PythonPlanContext): Python
     }
     elements.push(planned);
   }
-  return { kind: "list", elements };
+  // The printer has no lowering for an empty tuple display; a zero-element
+  // tuple literal has no owning lane and fails closed here.
+  if (isTupleLiteral && elements.length === 0) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.backend.tuple",
+      "Tuple literals require at least one element.",
+    ));
+    return undefined;
+  }
+  return isTupleLiteral ? { kind: "tuple", elements } : { kind: "list", elements };
 }
 
 // Object literals lower to keyword-argument construction of the generated
@@ -675,6 +896,9 @@ export function planArrayLiteral(node: Node, context: PythonPlanContext): Python
 // declared field must appear exactly once.
 function planRecordLiteral(node: Node, context: PythonPlanContext): PythonExpression | undefined {
   const fact = pythonOperationFact(node, context);
+  if (fact !== undefined && fact.kind === "dict-literal") {
+    return planDictLiteral(node, context);
+  }
   if (fact === undefined || fact.kind !== "record-literal") {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
@@ -739,6 +963,49 @@ function planRecordLiteral(node: Node, context: PythonPlanContext): PythonExpres
     return undefined;
   }
   return { kind: "call-kwargs", callee: { kind: "name", name: className }, args: [], kwargs };
+}
+
+// Object literals with a proven Record<string, T> carrier lower to a dict
+// display: keys are string literals in source property order (identifier and
+// string-literal property names only; keys never guess from computed text).
+function planDictLiteral(node: Node, context: PythonPlanContext): PythonExpression | undefined {
+  const { ast } = context.input;
+  const entries: { readonly key: PythonExpression; readonly value: PythonExpression }[] = [];
+  const seenKeys = new Set<string>();
+  for (const property of ast.properties(node)) {
+    if (property === undefined) {
+      continue;
+    }
+    const propertyKind = ast.kindName(property);
+    const nameNode = ast.name(property);
+    const nameKind = nameNode === undefined ? "" : ast.kindName(nameNode);
+    const valueNode = propertyKind === "KindShorthandPropertyAssignment" ? nameNode : Node_Initializer(property);
+    if (nameNode === undefined || valueNode === undefined ||
+      (nameKind !== KindIdentifier && nameKind !== KindStringLiteral)) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, property),
+        "python.backend.dict",
+        "Dict literals support only identifier or string-literal keys with value assignments.",
+      ));
+      return undefined;
+    }
+    const key = ast.text(nameNode);
+    if (seenKeys.has(key)) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, property),
+        "python.backend.dict",
+        "Dict literals require uniquely named keys.",
+      ));
+      return undefined;
+    }
+    seenKeys.add(key);
+    const value = planExpression(valueNode, context);
+    if (value === undefined) {
+      return undefined;
+    }
+    entries.push({ key: { kind: "string-literal", value: key }, value });
+  }
+  return { kind: "dict", entries };
 }
 
 function planAwaitExpression(node: Node, context: PythonPlanContext): PythonExpression | undefined {

@@ -1,4 +1,5 @@
 export { createPythonTargetPack, pythonTargetId } from "./descriptor/python-target-pack.js";
+export { createTsonicPlugin } from "./plugin.js";
 export {
   readPythonOutputType,
   readPythonPackageName,
@@ -36,7 +37,7 @@ export {
   printPythonTypeAnnotation,
 } from "./print/python-printer.js";
 export { printPyprojectManifest } from "./print/pyproject-printer.js";
-export * from "./source/provider-packages/stdlib.js";
+export * from "./source/capabilities/stdlib.js";
 export { mergePythonHostArtifacts } from "./backend/host-artifacts.js";
 export type {
   PythonHostArtifactContribution,
@@ -55,7 +56,7 @@ export {
 export type {
   PythonImportBinding,
   PythonListOperation,
-  PythonProviderOperationForm,
+  PythonCapabilityOperationForm,
   PythonSourceTypeCarrierValue,
   PythonTargetOperationFact,
 } from "./source/python-facts/keys.js";
@@ -80,18 +81,18 @@ export {
   samePythonPrimitiveCarrier,
 } from "./source/python-target-types.js";
 export {
-  collectPythonProviderOperationRows,
-  createPythonProviderPackage,
-  createPythonProviderPackageBindingProvider,
-  isPythonProviderOperationContributor,
-} from "./source/provider-packages/index.js";
+  collectPythonCapabilityOperationRows,
+  createPythonTargetCapability,
+  createPythonCapabilityBindingProvider,
+  isPythonCapabilityOperationContributor,
+} from "./source/capabilities/index.js";
 export type {
-  PythonProviderDependencyDefinition,
-  PythonProviderModuleDefinition,
-  PythonProviderOperationRow,
-  PythonProviderPackageDefinition,
-  PythonProviderPackageImplementation,
-} from "./source/provider-packages/index.js";
+  PythonCapabilityDependency,
+  PythonCapabilityModuleDefinition,
+  PythonCapabilityOperationRow,
+  PythonCapabilityDefinition,
+  PythonTargetCapability,
+} from "./source/capabilities/index.js";
 export { createPythonCompileInputFromSession } from "./session/compile-input.js";
 export { pythonTypeFromCarrier } from "./backend/planner/render-types.js";
 export {

@@ -1,13 +1,13 @@
 import type { TargetTypeRef } from "@tsonic/tsts";
-import { createPythonProviderPackage } from "./index.js";
-import type { PythonProviderPackageImplementation } from "./index.js";
+import { createPythonTargetCapability } from "./index.js";
+import type { PythonTargetCapability } from "./index.js";
 import {
   pythonNoneTargetType,
   pythonSourcePrimitiveTargetType,
   pythonStrTargetType,
 } from "../python-target-types.js";
 
-// Product provider packages for the Python standard library. Closed
+// Product target capabilitys for the Python standard library. Closed
 // contracts only: every operation row lowers through an existing lane
 // (call/constructor/method/property/static-attribute/static-method/await).
 // Concrete Python module and attribute names live here and nowhere else in
@@ -34,7 +34,7 @@ const datetimeCarrier: TargetTypeRef = { kind: "target-named", id: pythonDatetim
 
 const stdlibVersion = "1.0.0";
 
-export function createPythonMathPackage(): PythonProviderPackageImplementation {
+export function createPythonMathCapability(): PythonTargetCapability {
   const mathCall = (name: string) =>
     ({ form: "call", import: { style: "module", module: "math", name } }) as const;
   const numberFunction = (name: string, parameters: readonly string[], returnsInt: boolean) => ({
@@ -50,7 +50,7 @@ export function createPythonMathPackage(): PythonProviderPackageImplementation {
         : { kind: "number" as const },
     }],
   });
-  return createPythonProviderPackage({
+  return createPythonTargetCapability({
     id: "python-math",
     displayName: "Python stdlib: math",
     version: stdlibVersion,
@@ -129,9 +129,9 @@ export function createPythonMathPackage(): PythonProviderPackageImplementation {
   });
 }
 
-export function createPythonPathlibPackage(): PythonProviderPackageImplementation {
+export function createPythonPathlibCapability(): PythonTargetCapability {
   const pathRef = { kind: "provider-ref" as const, moduleSpecifier: "@python/pathlib", exportName: "Path" };
-  return createPythonProviderPackage({
+  return createPythonTargetCapability({
     id: "python-pathlib",
     displayName: "Python stdlib: pathlib",
     version: stdlibVersion,
@@ -256,8 +256,8 @@ export function createPythonPathlibPackage(): PythonProviderPackageImplementatio
   });
 }
 
-export function createPythonOsPackage(): PythonProviderPackageImplementation {
-  return createPythonProviderPackage({
+export function createPythonOsCapability(): PythonTargetCapability {
+  return createPythonTargetCapability({
     id: "python-os",
     displayName: "Python stdlib: os",
     version: stdlibVersion,
@@ -314,8 +314,8 @@ export function createPythonOsPackage(): PythonProviderPackageImplementation {
   });
 }
 
-export function createPythonSysPackage(): PythonProviderPackageImplementation {
-  return createPythonProviderPackage({
+export function createPythonSysCapability(): PythonTargetCapability {
+  return createPythonTargetCapability({
     id: "python-sys",
     displayName: "Python stdlib: sys",
     version: stdlibVersion,
@@ -342,9 +342,9 @@ export function createPythonSysPackage(): PythonProviderPackageImplementation {
   });
 }
 
-export function createPythonDatetimePackage(): PythonProviderPackageImplementation {
+export function createPythonDatetimeCapability(): PythonTargetCapability {
   const datetimeRef = { kind: "provider-ref" as const, moduleSpecifier: "@python/datetime", exportName: "datetime" };
-  return createPythonProviderPackage({
+  return createPythonTargetCapability({
     id: "python-datetime",
     displayName: "Python stdlib: datetime",
     version: stdlibVersion,
@@ -421,8 +421,8 @@ export function createPythonDatetimePackage(): PythonProviderPackageImplementati
   });
 }
 
-export function createPythonAsyncioPackage(): PythonProviderPackageImplementation {
-  return createPythonProviderPackage({
+export function createPythonAsyncioCapability(): PythonTargetCapability {
+  return createPythonTargetCapability({
     id: "python-asyncio",
     displayName: "Python stdlib: asyncio",
     version: stdlibVersion,
@@ -453,16 +453,16 @@ export function createPythonAsyncioPackage(): PythonProviderPackageImplementatio
   });
 }
 
-// The json module ships no provider package: `json.loads` returns a dynamic
-// value and `json.dumps` accepts one, so no closed row exists under the
-// current lowering lanes. A future record-typed contract can add it.
-export function createPythonStdlibProviderPackages(): readonly PythonProviderPackageImplementation[] {
+// The json module ships no rows: `json.loads` returns a dynamic value and
+// `json.dumps` accepts one, so no closed row shape exists. Typed record/list
+// carriers are the only sound basis for a json contract.
+export function createPythonStdlibCapabilities(): readonly PythonTargetCapability[] {
   return [
-    createPythonMathPackage(),
-    createPythonPathlibPackage(),
-    createPythonOsPackage(),
-    createPythonSysPackage(),
-    createPythonDatetimePackage(),
-    createPythonAsyncioPackage(),
+    createPythonMathCapability(),
+    createPythonPathlibCapability(),
+    createPythonOsCapability(),
+    createPythonSysCapability(),
+    createPythonDatetimeCapability(),
+    createPythonAsyncioCapability(),
   ];
 }

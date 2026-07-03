@@ -16,11 +16,12 @@ export type PythonImportRequirement =
 // Generated module-level helpers that carry closed Tsonic semantics Python
 // operators do not provide directly (truncating integer division/remainder
 // per the shared integer contract, versus Python's flooring // and %).
-export type PythonRuntimeHelper = "int-div" | "int-rem";
+export type PythonRuntimeHelper = "int-div" | "int-rem" | "index-of";
 
 export const pythonHelperNames: Readonly<Record<PythonRuntimeHelper, string>> = {
   "int-div": "_tsonic_int_div",
   "int-rem": "_tsonic_int_rem",
+  "index-of": "_tsonic_index_of",
 };
 
 // Reserved prefix for generated helper bindings; source names in this

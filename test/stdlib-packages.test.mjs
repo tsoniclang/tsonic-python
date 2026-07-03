@@ -2,17 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { artifactText, compilePython } from "./helpers/python-session.mjs";
 import {
-  createPythonAsyncioPackage,
-  createPythonDatetimePackage,
-  createPythonMathPackage,
-  createPythonOsPackage,
-  createPythonPathlibPackage,
-  createPythonStdlibProviderPackages,
-  createPythonSysPackage,
-} from "../dist/source/provider-packages/stdlib.js";
+  createPythonAsyncioCapability,
+  createPythonDatetimeCapability,
+  createPythonMathCapability,
+  createPythonOsCapability,
+  createPythonPathlibCapability,
+  createPythonStdlibCapabilities,
+  createPythonSysCapability,
+} from "../dist/source/capabilities/stdlib.js";
 
-test("stdlib provider packages create with unique ids and no dependencies", () => {
-  const packages = createPythonStdlibProviderPackages();
+test("stdlib target capabilitys create with unique ids and no dependencies", () => {
+  const packages = createPythonStdlibCapabilities();
   assert.equal(packages.length, 6);
   const ids = packages.map((providerPackage) => providerPackage.id);
   assert.deepEqual(ids, [
@@ -26,7 +26,7 @@ test("stdlib provider packages create with unique ids and no dependencies", () =
   assert.equal(new Set(ids).size, ids.length);
   for (const providerPackage of packages) {
     assert.deepEqual(providerPackage.runtimeContributions({}).references, []);
-    assert.ok(providerPackage.pythonProviderOperations().length > 0);
+    assert.ok(providerPackage.pythonCapabilityOperations().length > 0);
   }
 });
 
@@ -46,7 +46,6 @@ export function wholes(x: float64): int64 {
 }
 `,
     },
-    packages: [createPythonMathPackage()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -73,7 +72,6 @@ export function described(p: string): string {
 }
 `,
     },
-    packages: [createPythonPathlibPackage()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -95,7 +93,6 @@ export function whereAmI(): string {
 }
 `,
     },
-    packages: [createPythonOsPackage()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -115,7 +112,6 @@ export function platformName(): string {
 }
 `,
     },
-    packages: [createPythonSysPackage()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -140,7 +136,6 @@ export function currentYear(): int64 {
 }
 `,
     },
-    packages: [createPythonDatetimePackage()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -161,7 +156,6 @@ export async function pause(seconds: number): Promise<void> {
 }
 `,
     },
-    packages: [createPythonAsyncioPackage()],
   });
   assert.deepEqual(awaited.result.diagnostics, []);
   const text = artifactText(awaited.result, "src/tsonic_generated/index.py");
@@ -179,7 +173,6 @@ export async function pause(seconds: number): Promise<void> {
 }
 `,
     },
-    packages: [createPythonAsyncioPackage()],
   });
   assert.equal(unawaited.result.artifacts.length, 0);
   assert.ok(unawaited.result.diagnostics.length > 0);

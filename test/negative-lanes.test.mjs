@@ -111,19 +111,21 @@ export function sparse(): int32 {
   assertFailsClosed(result);
 });
 
-test("JS array semantics without facts fail closed: includes and length writes", () => {
-  const includes = compilePython({
+test("JS array semantics without proven lanes fail closed: non-primitive includes and length writes", () => {
+  const nonPrimitiveIncludes = compilePython({
     files: {
       "index.ts": `
-import type { int32 } from "@tsonic/core/types.js";
+export interface Item {
+  label: string;
+}
 
-export function has(xs: int32[], value: int32): boolean {
+export function has(xs: Item[], value: Item): boolean {
   return xs.includes(value);
 }
 `,
     },
   });
-  assertFailsClosed(includes.result);
+  assertFailsClosed(nonPrimitiveIncludes.result);
 
   const lengthWrite = compilePython({
     files: {
@@ -139,12 +141,12 @@ export function clear(xs: int32[]): void {
   assertFailsClosed(lengthWrite.result);
 });
 
-test("template literals fail closed without a lane", () => {
+test("template literals with unproven substitutions fail closed", () => {
   const { result } = compilePython({
     files: {
       "index.ts": `
-export function shout(name: string): string {
-  return \`hey \${name}\`;
+export function shout(values: unknown): string {
+  return \`got \${values}\`;
 }
 `,
     },

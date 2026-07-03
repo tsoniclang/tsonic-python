@@ -286,11 +286,13 @@ function planElementWriteStatement(
   context: PythonPlanContext,
 ): readonly PythonStatement[] | undefined {
   const fact = pythonOperationFact(expression, context) ?? pythonOperationFact(left, context);
-  if (fact === undefined || fact.kind !== "list-op" || fact.op !== "index-write") {
+  const isIndexWrite = fact !== undefined &&
+    ((fact.kind === "list-op" && fact.op === "index-write") || (fact.kind === "dict-op" && fact.op === "index-write"));
+  if (!isIndexWrite) {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, expression),
       "python.backend.assignment",
-      "Element assignments require a finalized list index-write fact.",
+      "Element assignments require a finalized list or dict index-write fact.",
     ));
     return undefined;
   }

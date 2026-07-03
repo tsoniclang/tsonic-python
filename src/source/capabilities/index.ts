@@ -10,31 +10,31 @@ import type {
   TargetTypeRef,
 } from "@tsonic/tsts";
 import type {
-  TargetProviderPackageImplementation,
-  TargetRuntimeContributionContext,
+  TargetCapabilityRuntimeContributionContext,
   TargetRuntimeContributions,
   TargetRuntimeReference,
+  TsonicTargetCapabilityPlugin,
 } from "@tsonic/target-api";
 import { pythonPackageReferenceKind } from "../../backend/planner/pyproject.js";
-import type { PythonProviderOperationForm } from "../python-facts/keys.js";
+import type { PythonCapabilityOperationForm } from "../python-facts/keys.js";
 
-// Generic Python provider-package model. Concrete module specifiers, export
+// Generic Python capability model. Concrete module specifiers, export
 // names, and Python import paths live only in package definitions (product
 // packages or test fakes), never in generic mapping code.
 
-export interface PythonProviderModuleDefinition {
+export interface PythonCapabilityModuleDefinition {
   readonly moduleSpecifier: string;
   readonly providerModuleId: string;
   readonly exports: readonly ProviderExportDeclaration[];
 }
 
-export interface PythonProviderOperationRow {
+export interface PythonCapabilityOperationRow {
   readonly exportId: string;
   readonly memberId?: string;
   readonly signatureId?: string;
   readonly receiverTypeId?: string;
   readonly operationKind: "method" | "constructor" | "property" | "indexer";
-  readonly target: PythonProviderOperationForm;
+  readonly target: PythonCapabilityOperationForm;
   readonly resultCarrier: TargetTypeRef;
   readonly parameterCarriers?: readonly TargetTypeRef[];
   // Async provider operations lower only as await operands; the result
@@ -42,28 +42,32 @@ export interface PythonProviderOperationRow {
   readonly isAsync?: boolean;
 }
 
-export interface PythonProviderDependencyDefinition {
+export interface PythonCapabilityDependency {
   readonly name: string;
   readonly version?: string;
 }
 
-export interface PythonProviderPackageDefinition {
+export interface PythonCapabilityDefinition {
   readonly id: string;
   readonly displayName: string;
   readonly version: string;
   readonly requiredSurfaces?: readonly string[];
-  readonly modules: readonly PythonProviderModuleDefinition[];
-  readonly operations: readonly PythonProviderOperationRow[];
-  readonly dependencies: readonly PythonProviderDependencyDefinition[];
+  readonly modules: readonly PythonCapabilityModuleDefinition[];
+  readonly operations: readonly PythonCapabilityOperationRow[];
+  readonly dependencies: readonly PythonCapabilityDependency[];
   readonly targetIdentities?: Readonly<Record<string, string>>;
 }
 
-export interface PythonProviderOperationContributor {
-  pythonProviderOperations(): readonly PythonProviderOperationRow[];
+export interface PythonCapabilityOperationContributor {
+  pythonCapabilityOperations(): readonly PythonCapabilityOperationRow[];
 }
 
-export type PythonProviderPackageImplementation =
-  TargetProviderPackageImplementation & PythonProviderOperationContributor;
+// A Python target capability is an installed target-capability plugin that
+// additionally exposes Python-owned operation rows. The generic
+// TargetCapabilityOperationMapper is not the operation interface: rows are
+// interpreted only by the Python target.
+export type PythonTargetCapability =
+  TsonicTargetCapabilityPlugin & PythonCapabilityOperationContributor;
 
 const pythonIdentifierPattern = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const pythonModulePathPattern = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/u;
@@ -98,7 +102,7 @@ function isRenderablePythonModulePath(path: string): boolean {
   return pythonModulePathPattern.test(path) && path.split(".").every((segment) => !pythonHardKeywords.has(segment));
 }
 
-function validatePythonProviderPackageDefinition(definition: PythonProviderPackageDefinition): void {
+function validatePythonCapabilityDefinition(definition: PythonCapabilityDefinition): void {
   const packageId = definition.id;
   const seenSpecifiers = new Set<string>();
   const seenModuleIds = new Set<string>();
@@ -109,22 +113,22 @@ function validatePythonProviderPackageDefinition(definition: PythonProviderPacka
   const declaredTargetIdentityIds = new Set(Object.values(definition.targetIdentities ?? {}));
   for (const module of definition.modules) {
     if (module.moduleSpecifier.length === 0) {
-      throw new Error(`Provider package '${packageId}': module specifiers must be non-empty.`);
+      throw new Error(`Target capability '${packageId}': module specifiers must be non-empty.`);
     }
     if (module.providerModuleId.length === 0) {
-      throw new Error(`Provider package '${packageId}': provider module ids must be non-empty.`);
+      throw new Error(`Target capability '${packageId}': provider module ids must be non-empty.`);
     }
     if (seenSpecifiers.has(module.moduleSpecifier)) {
-      throw new Error(`Provider package '${packageId}': duplicate module specifier '${module.moduleSpecifier}'.`);
+      throw new Error(`Target capability '${packageId}': duplicate module specifier '${module.moduleSpecifier}'.`);
     }
     seenSpecifiers.add(module.moduleSpecifier);
     if (seenModuleIds.has(module.providerModuleId)) {
-      throw new Error(`Provider package '${packageId}': duplicate provider module id '${module.providerModuleId}'.`);
+      throw new Error(`Target capability '${packageId}': duplicate provider module id '${module.providerModuleId}'.`);
     }
     seenModuleIds.add(module.providerModuleId);
     for (const exportDeclaration of module.exports) {
       if (declaredExportIds.has(exportDeclaration.id)) {
-        throw new Error(`Provider package '${packageId}': duplicate export id '${exportDeclaration.id}'.`);
+        throw new Error(`Target capability '${packageId}': duplicate export id '${exportDeclaration.id}'.`);
       }
       declaredExportIds.add(exportDeclaration.id);
       const memberIds = new Set<string>();
@@ -147,48 +151,48 @@ function validatePythonProviderPackageDefinition(definition: PythonProviderPacka
   const seenRows = new Set<string>();
   for (const row of definition.operations) {
     if (!declaredExportIds.has(row.exportId)) {
-      throw new Error(`Provider package '${packageId}': operation row references undeclared export '${row.exportId}'.`);
+      throw new Error(`Target capability '${packageId}': operation row references undeclared export '${row.exportId}'.`);
     }
     const rowLabel = row.memberId ?? row.exportId;
     const rowKey = [row.exportId, row.memberId ?? "", row.signatureId ?? "", row.receiverTypeId ?? "", row.operationKind].join("|");
     if (seenRows.has(rowKey)) {
-      throw new Error(`Provider package '${packageId}': duplicate operation row for '${rowLabel}' (${row.operationKind}).`);
+      throw new Error(`Target capability '${packageId}': duplicate operation row for '${rowLabel}' (${row.operationKind}).`);
     }
     seenRows.add(rowKey);
     if ((row.resultCarrier as unknown) === undefined) {
-      throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' is missing a result carrier.`);
+      throw new Error(`Target capability '${packageId}': operation row '${rowLabel}' is missing a result carrier.`);
     }
     if (row.isAsync === true && row.operationKind !== "method") {
-      throw new Error(`Provider package '${packageId}': isAsync is supported only on method operations (row '${rowLabel}').`);
+      throw new Error(`Target capability '${packageId}': isAsync is supported only on method operations (row '${rowLabel}').`);
     }
     const receiverForms = new Set(["method", "property", "index", "builtin-call"]);
     if (receiverForms.has(row.target.form) && (row.receiverTypeId === undefined || row.receiverTypeId.length === 0)) {
-      throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' uses a receiver form and requires a receiverTypeId.`);
+      throw new Error(`Target capability '${packageId}': operation row '${rowLabel}' uses a receiver form and requires a receiverTypeId.`);
     }
-    validatePythonProviderOperationForm(packageId, rowLabel, row.target);
+    validatePythonCapabilityOperationForm(packageId, rowLabel, row.target);
     // Row identities must prove against the declaration model: bad metadata
     // fails at package creation, never as a downstream missing-fact failure.
     if (row.memberId !== undefined && declaredMemberIdsByExport.get(row.exportId)?.has(row.memberId) !== true) {
-      throw new Error(`Provider package '${packageId}': operation row references undeclared member '${row.memberId}' on export '${row.exportId}'.`);
+      throw new Error(`Target capability '${packageId}': operation row references undeclared member '${row.memberId}' on export '${row.exportId}'.`);
     }
     if (row.signatureId !== undefined) {
       const declaredSignatureIds = row.memberId === undefined
         ? declaredSignatureIdsByExport.get(row.exportId)
         : declaredSignatureIdsByMember.get(`${row.exportId}|${row.memberId}`);
       if (declaredSignatureIds?.has(row.signatureId) !== true) {
-        throw new Error(`Provider package '${packageId}': operation row references undeclared signature '${row.signatureId}' on '${row.memberId ?? row.exportId}'.`);
+        throw new Error(`Target capability '${packageId}': operation row references undeclared signature '${row.signatureId}' on '${row.memberId ?? row.exportId}'.`);
       }
     }
     if (row.receiverTypeId !== undefined && !declaredTargetIdentityIds.has(row.receiverTypeId)) {
-      throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' uses receiverTypeId '${row.receiverTypeId}', which is not a declared target identity.`);
+      throw new Error(`Target capability '${packageId}': operation row '${rowLabel}' uses receiverTypeId '${row.receiverTypeId}', which is not a declared target identity.`);
     }
   }
 }
 
-function validatePythonProviderOperationForm(packageId: string, rowLabel: string, form: PythonProviderOperationForm): void {
+function validatePythonCapabilityOperationForm(packageId: string, rowLabel: string, form: PythonCapabilityOperationForm): void {
   const rejectName = (name: string, what: string): void => {
     if (!isRenderablePythonName(name)) {
-      throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' has an invalid Python ${what} '${name}'.`);
+      throw new Error(`Target capability '${packageId}': operation row '${rowLabel}' has an invalid Python ${what} '${name}'.`);
     }
   };
   if (form.form === "method" || form.form === "property" || form.form === "builtin-call") {
@@ -200,7 +204,7 @@ function validatePythonProviderOperationForm(packageId: string, rowLabel: string
   }
   const binding = form.import;
   if (!isRenderablePythonModulePath(binding.module)) {
-    throw new Error(`Provider package '${packageId}': operation row '${rowLabel}' has an invalid Python module '${binding.module}'.`);
+    throw new Error(`Target capability '${packageId}': operation row '${rowLabel}' has an invalid Python module '${binding.module}'.`);
   }
   if (binding.style === "from") {
     rejectName(binding.name, "import name");
@@ -212,17 +216,19 @@ function validatePythonProviderOperationForm(packageId: string, rowLabel: string
   }
 }
 
-export function createPythonProviderPackage(definition: PythonProviderPackageDefinition): PythonProviderPackageImplementation {
-  validatePythonProviderPackageDefinition(definition);
+export function createPythonTargetCapability(definition: PythonCapabilityDefinition): PythonTargetCapability {
+  validatePythonCapabilityDefinition(definition);
   return {
+    kind: "target-capability",
     id: definition.id,
+    targetId: "python",
     displayName: definition.displayName,
     ...(definition.requiredSurfaces === undefined ? {} : { requiredSurfaces: definition.requiredSurfaces }),
     moduleOwnership: definition.modules.map((module) => ({ specifierPrefix: module.moduleSpecifier })),
     createExtensions(): readonly CompilerExtension[] {
-      return [createPythonProviderPackageBindingExtension(definition)];
+      return [createPythonCapabilityBindingExtension(definition)];
     },
-    runtimeContributions(_context: TargetRuntimeContributionContext): TargetRuntimeContributions {
+    runtimeContributions(_context: TargetCapabilityRuntimeContributionContext): TargetRuntimeContributions {
       return {
         references: definition.dependencies.map((dependency): TargetRuntimeReference => ({
           kind: pythonPackageReferenceKind,
@@ -231,48 +237,48 @@ export function createPythonProviderPackage(definition: PythonProviderPackageDef
         })),
       };
     },
-    pythonProviderOperations(): readonly PythonProviderOperationRow[] {
+    pythonCapabilityOperations(): readonly PythonCapabilityOperationRow[] {
       return definition.operations;
     },
   };
 }
 
-export function isPythonProviderOperationContributor(
+export function isPythonCapabilityOperationContributor(
   value: object,
-): value is PythonProviderOperationContributor {
-  return typeof (value as { pythonProviderOperations?: unknown }).pythonProviderOperations === "function";
+): value is PythonCapabilityOperationContributor {
+  return typeof (value as { pythonCapabilityOperations?: unknown }).pythonCapabilityOperations === "function";
 }
 
-export function collectPythonProviderOperationRows(
-  selectedPackages: readonly object[],
-): readonly PythonProviderOperationRow[] {
-  const rows: PythonProviderOperationRow[] = [];
-  for (const selectedPackage of selectedPackages) {
-    if (isPythonProviderOperationContributor(selectedPackage)) {
-      rows.push(...selectedPackage.pythonProviderOperations());
+export function collectPythonCapabilityOperationRows(
+  installedCapabilities: readonly object[],
+): readonly PythonCapabilityOperationRow[] {
+  const rows: PythonCapabilityOperationRow[] = [];
+  for (const installedCapability of installedCapabilities) {
+    if (isPythonCapabilityOperationContributor(installedCapability)) {
+      rows.push(...installedCapability.pythonCapabilityOperations());
     }
   }
   return rows;
 }
 
-function createPythonProviderPackageBindingExtension(definition: PythonProviderPackageDefinition): CompilerExtension {
+function createPythonCapabilityBindingExtension(definition: PythonCapabilityDefinition): CompilerExtension {
   return {
     identity: {
-      id: `tsonic.python.provider-package.${definition.id}`,
+      id: `tsonic.python.capability.${definition.id}`,
       version: definition.version,
-      capabilityNamespace: `tsonic.python.provider-package.${definition.id}`,
+      capabilityNamespace: `tsonic.python.capability.${definition.id}`,
     },
     initialize(context): void {
-      context.registerTargetBindingProvider(createPythonProviderPackageBindingProvider(definition));
+      context.registerTargetBindingProvider(createPythonCapabilityBindingProvider(definition));
     },
   };
 }
 
-export function createPythonProviderPackageBindingProvider(definition: PythonProviderPackageDefinition): TargetBindingProvider {
+export function createPythonCapabilityBindingProvider(definition: PythonCapabilityDefinition): TargetBindingProvider {
   const modulesBySpecifier = new Map(definition.modules.map((module) => [module.moduleSpecifier, module]));
   return {
     identity: {
-      id: `tsonic.python.provider-package.${definition.id}.binding`,
+      id: `tsonic.python.capability.${definition.id}.binding`,
       version: definition.version,
       target: "python",
       extensionContractVersion: TstsProviderContractVersion,
@@ -285,11 +291,11 @@ export function createPythonProviderPackageBindingProvider(definition: PythonPro
       const module = modulesBySpecifier.get(specifier);
       if (module === undefined) {
         return {
-          extensionId: `tsonic.python.provider-package.${definition.id}`,
-          extensionCode: "PYTHON_PROVIDER_MODULE_NOT_OWNED",
+          extensionId: `tsonic.python.capability.${definition.id}`,
+          extensionCode: "PYTHON_CAPABILITY_MODULE_NOT_OWNED",
           numericCode: 0,
           category: "error" as const,
-          message: `Provider package '${definition.id}' does not own module '${specifier}'.`,
+          message: `Target capability '${definition.id}' does not own module '${specifier}'.`,
         };
       }
       return {

@@ -111,6 +111,17 @@ test("no Node-as-surface registration", async () => {
   }
 });
 
+test("no legacy package-selection path in product code", () => {
+  // Third-party libraries are installed target-capability plugins; the
+  // config-selected package path and its vocabulary must not reappear.
+  const bannedTokens = ["selectedPackages", "packageIds", "TargetProviderPackageImplementation", "pack.packages", "packages:"];
+  for (const { path, text } of sourceFiles) {
+    for (const token of bannedTokens) {
+      assert.ok(!text.includes(token), `${path} contains legacy package-selection token ${token}`);
+    }
+  }
+});
+
 test("no fallback source emission: backend diagnostics never coexist with artifacts", () => {
   // Structural rule enforced in planPythonArtifacts: every early return with
   // diagnostics returns an empty artifact list. Verified behaviorally in the

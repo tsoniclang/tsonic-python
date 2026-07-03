@@ -8,6 +8,8 @@ export const pythonStrTargetId = "python.str";
 // Selected error policy: source `Error` values carry the Python Exception
 // identity; catch bindings and throw sites share this carrier.
 export const pythonExceptionTargetId = "python.Exception";
+export const pythonOptionalTargetId = "python.Optional";
+export const pythonDictTargetId = "python.dict";
 
 export function pythonSourcePrimitiveTargetType(kind: SourcePrimitiveKind): TargetTypeRef {
   return { kind: "source-primitive", name: kind };
@@ -101,4 +103,40 @@ export function isPythonFloatCarrier(carrier: TargetTypeRef | undefined): boolea
 
 export function samePythonPrimitiveCarrier(left: TargetTypeRef | undefined, right: TargetTypeRef | undefined): boolean {
   return left?.kind === "source-primitive" && right?.kind === "source-primitive" && left.name === right.name;
+}
+
+export function pythonOptionalTargetType(inner: TargetTypeRef): TargetTypeRef {
+  return { kind: "target-named", id: pythonOptionalTargetId, typeArguments: [inner] };
+}
+
+export function isPythonOptionalCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && carrier.id === pythonOptionalTargetId;
+}
+
+export function pythonOptionalInnerCarrier(carrier: TargetTypeRef | undefined): TargetTypeRef | undefined {
+  return carrier?.kind === "target-named" && carrier.id === pythonOptionalTargetId
+    ? carrier.typeArguments?.[0]
+    : undefined;
+}
+
+export function pythonDictTargetType(value: TargetTypeRef): TargetTypeRef {
+  return { kind: "target-named", id: pythonDictTargetId, typeArguments: [pythonStrTargetType(), value] };
+}
+
+export function isPythonDictCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && carrier.id === pythonDictTargetId;
+}
+
+export function pythonDictValueCarrier(carrier: TargetTypeRef | undefined): TargetTypeRef | undefined {
+  return carrier?.kind === "target-named" && carrier.id === pythonDictTargetId
+    ? carrier.typeArguments?.[1]
+    : undefined;
+}
+
+export function pythonTupleTargetType(elements: readonly TargetTypeRef[]): TargetTypeRef {
+  return { kind: "tuple", elements };
+}
+
+export function isPythonTupleCarrier(carrier: TargetTypeRef | undefined): carrier is Extract<TargetTypeRef, { kind: "tuple" }> {
+  return carrier?.kind === "tuple" && carrier.elements.length > 0;
 }

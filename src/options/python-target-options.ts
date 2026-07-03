@@ -6,7 +6,7 @@ import { pythonReservedIdentifiers } from "../common/python-names.js";
 
 export type PythonOutputType = "package" | "script";
 
-export type PythonVersion = "3.12" | "3.13";
+export type PythonVersion = "3.12" | "3.13" | "3.14";
 
 const supportedPythonTargetOptionKeys = Object.freeze([
   "outputType",
@@ -53,8 +53,8 @@ export function readPythonVersion(target: TargetSelection): PythonVersion {
   if (value === undefined) {
     return "3.12";
   }
-  if (value !== "3.12" && value !== "3.13") {
-    throw new Error("Python target option 'pythonVersion' must be either '3.12' or '3.13'.");
+  if (value !== "3.12" && value !== "3.13" && value !== "3.14") {
+    throw new Error("Python target option 'pythonVersion' must be '3.12', '3.13', or '3.14'.");
   }
   return value;
 }
@@ -75,9 +75,9 @@ export function readPythonTypescriptCompatibilityMode(target: TargetSelection): 
   if (value === undefined) {
     return "strict-native";
   }
-  // Compat mode requires the python-js runtime package; this target has no
-  // wired compat lane, so selecting it fails closed instead of silently
-  // enabling dynamic behavior.
+  // Compat mode requires the python-js runtime package; without a wired
+  // compat lane, selecting it fails closed instead of silently enabling
+  // dynamic behavior.
   if (value === "compat") {
     throw new Error("Python target option 'typescriptCompatibility' rejects 'compat': the python-js compat runtime is not wired into this target.");
   }

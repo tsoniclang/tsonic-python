@@ -52,6 +52,8 @@ import {
   KindIfStatement,
   KindInterfaceDeclaration,
   KindNewExpression,
+  KindNoSubstitutionTemplateLiteral,
+  KindNullKeyword,
   KindNumericLiteral,
   KindOmittedExpression,
   KindParameter,
@@ -62,6 +64,8 @@ import {
   KindReturnStatement,
   KindStringKeyword,
   KindStringLiteral,
+  KindTemplateExpression,
+  KindTemplateSpan,
   KindTrueKeyword,
   KindTypeReference,
   KindVariableDeclaration,
@@ -87,17 +91,24 @@ import {
 } from "../../common/source-ast.js";
 import {
   isPythonBoolCarrier,
+  isPythonDictCarrier,
   isPythonExceptionCarrier,
   isPythonIntegerCarrier,
   isPythonNumericCarrier,
+  isPythonOptionalCarrier,
   isPythonStrCarrier,
+  isPythonTupleCarrier,
+  pythonDictTargetType,
+  pythonDictValueCarrier,
   pythonExceptionTargetType,
   pythonListElementCarrier,
   pythonListTargetType,
   pythonNoneTargetType,
+  pythonOptionalTargetType,
   pythonPrimitiveTypeName,
   pythonSourcePrimitiveTargetType,
   pythonStrTargetType,
+  pythonTupleTargetType,
 } from "../python-target-types.js";
 import {
   pythonAsyncFunctionFactKey,
@@ -106,9 +117,10 @@ import {
   pythonSourceTypeCarrierValue,
   pythonTargetOperationFactKey,
 } from "../python-facts/keys.js";
-import type { PythonProviderOperationForm, PythonTargetOperationFact } from "../python-facts/keys.js";
-import { collectPythonProviderOperationRows } from "../provider-packages/index.js";
-import type { PythonProviderOperationRow } from "../provider-packages/index.js";
+import type { PythonCapabilityOperationForm, PythonTargetOperationFact } from "../python-facts/keys.js";
+import { collectPythonCapabilityOperationRows } from "../capabilities/index.js";
+import { createPythonStdlibCapabilities } from "../capabilities/stdlib.js";
+import type { PythonCapabilityOperationRow } from "../capabilities/index.js";
 import {
   isPythonSignedNumericCarrier,
   pythonOperatorCarrierKey,
@@ -121,7 +133,10 @@ export const pythonTargetSemanticsExtensionId = "tsonic.python.target-semantics"
 
 export function createPythonTargetSemanticsExtension(context: TargetProviderContext): CompilerExtension {
   validatePythonTargetOptions(context.target);
-  const providerRows = collectPythonProviderOperationRows(context.selectedPackages);
+  const providerRows = collectPythonCapabilityOperationRows([
+    ...createPythonStdlibCapabilities(),
+    ...context.selectedCapabilities,
+  ]);
   return {
     identity: {
       id: pythonTargetSemanticsExtensionId,
@@ -146,7 +161,7 @@ export function createPythonTargetSemanticsExtension(context: TargetProviderCont
 
 interface PythonFactWalk {
   readonly lifecycle: ExtensionLifecycleContext;
-  readonly providerRows: readonly PythonProviderOperationRow[];
+  readonly providerRows: readonly PythonCapabilityOperationRow[];
   readonly resolving: Set<object>;
   // Proven project-source type declarations keyed by fileName::typeName. Only
   // registered declarations own source-type lanes; everything else fails
@@ -179,10 +194,14 @@ const KindAwaitExpression = "KindAwaitExpression";
 const KindThisKeyword = "KindThisKeyword";
 const KindThisExpression = "KindThisExpression";
 const KindDecorator = "KindDecorator";
+const KindUnionType = "KindUnionType";
+const KindLiteralType = "KindLiteralType";
+const KindTupleType = "KindTupleType";
+const KindSyntaxList = "KindSyntaxList";
 
 export function recordPythonFactsBeforeFinalization(
   lifecycle: ExtensionLifecycleContext,
-  providerRows: readonly PythonProviderOperationRow[],
+  providerRows: readonly PythonCapabilityOperationRow[],
 ): void {
   const walk: PythonFactWalk = { lifecycle, providerRows, resolving: new Set(), provenSourceTypes: new Map() };
   const { ast } = lifecycle.compiler;
@@ -593,10 +612,22 @@ function resolveTypeNodeCarrier(walk: PythonFactWalk, typeNode: Node | undefined
     if (sourceType !== undefined) {
       return setCarrierFact(walk, typeNode, sourceType);
     }
+    const dictType = dictTypeCarrier(walk, typeNode);
+    if (dictType !== undefined) {
+      return setCarrierFact(walk, typeNode, dictType);
+    }
   }
   if (kind === KindArrayType) {
     const element = resolveTypeNodeCarrier(walk, ArrayTypeNode_ElementType(typeNode));
     return element === undefined ? undefined : setCarrierFact(walk, typeNode, pythonListTargetType(element));
+  }
+  if (kind === KindUnionType) {
+    const optional = optionalUnionCarrier(walk, typeNode);
+    return optional === undefined ? undefined : setCarrierFact(walk, typeNode, optional);
+  }
+  if (kind === KindTupleType) {
+    const tuple = tupleTypeCarrier(walk, typeNode);
+    return tuple === undefined ? undefined : setCarrierFact(walk, typeNode, tuple);
   }
   if (kind === KindStringKeyword) {
     return setCarrierFact(walk, typeNode, pythonStrTargetType());
@@ -611,6 +642,76 @@ function resolveTypeNodeCarrier(walk: PythonFactWalk, typeNode: Node | undefined
     return setCarrierFact(walk, typeNode, pythonNoneTargetType());
   }
   return undefined;
+}
+
+// `T | null` (either order) is the only proven nullable shape; `undefined`
+// members stay without a lane.
+function optionalUnionCarrier(walk: PythonFactWalk, typeNode: Node): TargetTypeRef | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  const memberNodes = ast.children(typeNode)
+    .filter((child): child is Node => child !== undefined)
+    .flatMap((child) => ast.kindName(child) === KindSyntaxList
+      ? ast.children(child).filter((entry): entry is Node => entry !== undefined)
+      : [child])
+    .filter((child) => !ast.kindName(child).endsWith("Token"));
+  if (memberNodes.length !== 2) {
+    return undefined;
+  }
+  const isNullMember = (member: Node): boolean => {
+    if (ast.kindName(member) !== KindLiteralType) {
+      return false;
+    }
+    const literal = ast.children(member)[0];
+    return literal !== undefined && ast.kindName(literal) === KindNullKeyword;
+  };
+  const nullMember = memberNodes.find(isNullMember);
+  const valueMember = memberNodes.find((member) => !isNullMember(member));
+  if (nullMember === undefined || valueMember === undefined) {
+    return undefined;
+  }
+  const inner = resolveTypeNodeCarrier(walk, valueMember);
+  return inner === undefined ? undefined : pythonOptionalTargetType(inner);
+}
+
+// Record<string, T> from the standard library with a proven value carrier is
+// the dict lane; other Record instantiations have no lane.
+function dictTypeCarrier(walk: PythonFactWalk, typeNode: Node): TargetTypeRef | undefined {
+  const { ast, checker } = walk.lifecycle.compiler;
+  const nameNode = TypeReferenceNode_TypeName(typeNode) ?? typeNode;
+  const symbol = checker.getSymbolAtLocation(nameNode) ?? checker.getResolvedSymbolOrNil(nameNode);
+  if (symbol === undefined || checker.getSymbolName(symbol) !== "Record") {
+    return undefined;
+  }
+  const isLibDeclaration = checker.getSymbolDeclarations(symbol).some((declaration) =>
+    declaration !== undefined && ast.getFileName(ast.getSourceFile(declaration)).endsWith(".d.ts"));
+  if (!isLibDeclaration) {
+    return undefined;
+  }
+  const [keyArgument, valueArgument] = ast.typeArguments(typeNode);
+  if (keyArgument === undefined || ast.kindName(keyArgument) !== KindStringKeyword || valueArgument === undefined) {
+    return undefined;
+  }
+  const value = resolveTypeNodeCarrier(walk, valueArgument);
+  return value === undefined ? undefined : pythonDictTargetType(value);
+}
+
+// Tuple types need every element proven; the empty tuple stays unmapped (its
+// carrier shape is the None identity).
+function tupleTypeCarrier(walk: PythonFactWalk, typeNode: Node): TargetTypeRef | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  const elementNodes = ast.elements(typeNode).filter((element): element is Node => element !== undefined);
+  if (elementNodes.length === 0) {
+    return undefined;
+  }
+  const elements: TargetTypeRef[] = [];
+  for (const elementNode of elementNodes) {
+    const element = resolveTypeNodeCarrier(walk, elementNode);
+    if (element === undefined) {
+      return undefined;
+    }
+    elements.push(element);
+  }
+  return pythonTupleTargetType(elements);
 }
 
 function resolveExpressionCarrier(
@@ -652,6 +753,18 @@ function resolveExpressionCarrierUncached(
     case KindStringLiteral: {
       return setCarrierFact(walk, expression, pythonStrTargetType());
     }
+    case KindNullKeyword: {
+      // Null carries the expected optional identity so the planner can emit
+      // None; without an optional expectation it has no lane.
+      if (expected !== undefined && isPythonOptionalCarrier(expected)) {
+        return setCarrierFact(walk, expression, expected);
+      }
+      return undefined;
+    }
+    case KindTemplateExpression:
+    case KindNoSubstitutionTemplateLiteral: {
+      return resolveTemplateCarrier(walk, expression, sourceFile, kind);
+    }
     case KindTrueKeyword:
     case KindFalseKeyword: {
       return setCarrierFact(walk, expression, boolCarrier);
@@ -668,7 +781,8 @@ function resolveExpressionCarrierUncached(
       return resolveArrayLiteralCarrier(walk, expression, sourceFile, expected);
     }
     case KindObjectLiteralExpression: {
-      return resolveRecordLiteralCarrier(walk, expression, sourceFile, expected);
+      return resolveDictLiteralCarrier(walk, expression, sourceFile, expected) ??
+        resolveRecordLiteralCarrier(walk, expression, sourceFile, expected);
     }
     case KindAwaitExpression: {
       return resolveAwaitCarrier(walk, expression, sourceFile);
@@ -812,6 +926,13 @@ function resolveBinaryCarrier(
   if (operatorKind === KindEqualsToken) {
     return undefined;
   }
+  if (operatorKind === KindEqualsEqualsEqualsToken || operatorKind === KindExclamationEqualsEqualsToken) {
+    const nullCheck = tryRecordNullCheck(walk, expression, left, right, sourceFile,
+      operatorKind === KindExclamationEqualsEqualsToken);
+    if (nullCheck !== undefined) {
+      return nullCheck;
+    }
+  }
   let leftCarrier = resolveExpressionCarrier(walk, left, sourceFile, undefined);
   let rightCarrier = resolveExpressionCarrier(walk, right, sourceFile, undefined);
   if (leftCarrier === undefined && rightCarrier !== undefined && isPythonNumericCarrier(rightCarrier)) {
@@ -852,6 +973,34 @@ function resolveBinaryCarrier(
     recordOperatorFacts(walk, expression, selection.pythonOperator, selection.resultCarrier, pythonOperatorCarrierKey(leftCarrier));
   }
   return setCarrierFact(walk, expression, selection.resultCarrier);
+}
+
+// Null comparisons against optional-carrying values are identity checks: the
+// Python spelling is `is` / `is not` None.
+function tryRecordNullCheck(
+  walk: PythonFactWalk,
+  expression: Node,
+  left: Node,
+  right: Node,
+  sourceFile: SourceFile,
+  negated: boolean,
+): TargetTypeRef | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  const leftIsNull = ast.kindName(left) === KindNullKeyword;
+  const rightIsNull = ast.kindName(right) === KindNullKeyword;
+  if (leftIsNull === rightIsNull) {
+    return undefined;
+  }
+  const valueSide = leftIsNull ? right : left;
+  const nullSide = leftIsNull ? left : right;
+  const valueCarrier = resolveExpressionCarrier(walk, valueSide, sourceFile, undefined);
+  if (valueCarrier === undefined || !isPythonOptionalCarrier(valueCarrier)) {
+    return undefined;
+  }
+  resolveExpressionCarrier(walk, nullSide, sourceFile, valueCarrier);
+  const operator = negated ? "is not" : "is";
+  recordOperatorFacts(walk, expression, operator, boolCarrier, pythonOperatorCarrierKey(valueCarrier));
+  return setCarrierFact(walk, expression, boolCarrier);
 }
 
 function resolveCallLikeCarrier(
@@ -901,9 +1050,9 @@ function resolveCallLikeCarrier(
   if (expressionKind === KindNewExpression) {
     return undefined;
   }
-  const listAppend = tryListAppendCall(walk, expression, callee, callArguments, sourceFile);
-  if (listAppend !== undefined) {
-    return listAppend;
+  const listMethod = tryListMethodCall(walk, expression, callee, callArguments, sourceFile);
+  if (listMethod !== undefined) {
+    return listMethod;
   }
   const symbol = checker.getResolvedSymbolOrNil(callee) ?? checker.getSymbolAtLocation(callee);
   if (symbol === undefined) {
@@ -941,7 +1090,7 @@ function resolveCallLikeCarrier(
   return returnCarrier === undefined ? undefined : setCarrierFact(walk, expression, returnCarrier);
 }
 
-function tryListAppendCall(
+function tryListMethodCall(
   walk: PythonFactWalk,
   expression: Node,
   callee: Node,
@@ -953,7 +1102,8 @@ function tryListAppendCall(
     return undefined;
   }
   const nameNode = Node_Name(callee);
-  if (nameNode === undefined || ast.text(nameNode) !== "push") {
+  const methodName = nameNode === undefined ? "" : ast.text(nameNode);
+  if (methodName !== "push" && methodName !== "includes" && methodName !== "indexOf") {
     return undefined;
   }
   const receiver = Node_Expression(callee);
@@ -972,15 +1122,42 @@ function tryListAppendCall(
   if (argumentCarrier === undefined || !sameCarrier(argumentCarrier, element)) {
     return undefined;
   }
-  const operationId = "tsonic.python.list.append";
-  recordTargetOperation(walk, expression, operationId, "method", "append");
+  if (methodName === "push") {
+    const operationId = "tsonic.python.list.append";
+    recordTargetOperation(walk, expression, operationId, "method", "append");
+    setPythonOperationFact(walk, expression, {
+      kind: "list-op",
+      operationId,
+      op: "append",
+      resultCarrier: pythonNoneTargetType(),
+    });
+    return setCarrierFact(walk, expression, pythonNoneTargetType());
+  }
+  // Search compares by value; only primitive and str elements share equality
+  // semantics between the source language and Python.
+  if (element.kind !== "source-primitive" && !isPythonStrCarrier(element)) {
+    return undefined;
+  }
+  if (methodName === "includes") {
+    const operationId = "tsonic.python.list.includes";
+    recordTargetOperation(walk, expression, operationId, "method", "in");
+    setPythonOperationFact(walk, expression, {
+      kind: "list-op",
+      operationId,
+      op: "includes",
+      resultCarrier: boolCarrier,
+    });
+    return setCarrierFact(walk, expression, boolCarrier);
+  }
+  const operationId = "tsonic.python.list.index-of";
+  recordTargetOperation(walk, expression, operationId, "method", "index");
   setPythonOperationFact(walk, expression, {
     kind: "list-op",
     operationId,
-    op: "append",
-    resultCarrier: pythonNoneTargetType(),
+    op: "index-of",
+    resultCarrier: listLengthCarrier,
   });
-  return setCarrierFact(walk, expression, pythonNoneTargetType());
+  return setCarrierFact(walk, expression, listLengthCarrier);
 }
 
 function resolvePropertyAccessCarrier(
@@ -1024,7 +1201,7 @@ function resolvePropertyAccessCarrier(
       const operationId = "tsonic.python.error.message";
       recordTargetOperation(walk, expression, operationId, "property", "str");
       setPythonOperationFact(walk, expression, {
-        kind: "provider-operation",
+        kind: "capability-operation",
         operationId,
         operationKind: "property",
         target: { form: "builtin-call", name: "str" },
@@ -1066,6 +1243,51 @@ function resolveElementAccessCarrier(
     });
     return setCarrierFact(walk, expression, element);
   }
+  if (isPythonTupleCarrier(receiverCarrier)) {
+    // Tuples read only through numeric literal indexes: the element carrier
+    // is positional and a dynamic index has no single proven carrier.
+    const { ast } = walk.lifecycle.compiler;
+    if (argument === undefined || ast.kindName(argument) !== KindNumericLiteral) {
+      return undefined;
+    }
+    const indexText = ast.text(argument);
+    if (!/^[0-9]+$/u.test(indexText)) {
+      return undefined;
+    }
+    const index = Number.parseInt(indexText, 10);
+    const tupleElement = receiverCarrier.elements[index];
+    if (tupleElement === undefined) {
+      return undefined;
+    }
+    setCarrierFact(walk, argument, listLengthCarrier);
+    const operationId = `tsonic.python.tuple.index.${index}`;
+    recordTargetOperation(walk, expression, operationId, "indexer", "[]");
+    setPythonOperationFact(walk, expression, {
+      kind: "tuple-index",
+      operationId,
+      index,
+      resultCarrier: tupleElement,
+    });
+    return setCarrierFact(walk, expression, tupleElement);
+  }
+  const dictValue = pythonDictValueCarrier(receiverCarrier);
+  if (dictValue !== undefined) {
+    const keyCarrier = argument === undefined
+      ? undefined
+      : resolveExpressionCarrier(walk, argument, sourceFile, pythonStrTargetType());
+    if (!isPythonStrCarrier(keyCarrier)) {
+      return undefined;
+    }
+    const operationId = "tsonic.python.dict.index-read";
+    recordTargetOperation(walk, expression, operationId, "indexer", "[]");
+    setPythonOperationFact(walk, expression, {
+      kind: "dict-op",
+      operationId,
+      op: "index-read",
+      resultCarrier: dictValue,
+    });
+    return setCarrierFact(walk, expression, dictValue);
+  }
   if (receiverCarrier?.kind !== "target-named") {
     return undefined;
   }
@@ -1093,29 +1315,50 @@ function recordListIndexWriteFacts(
   const receiverCarrier = receiver === undefined
     ? undefined
     : resolveExpressionCarrier(walk, receiver, sourceFile, undefined);
-  const element = pythonListElementCarrier(receiverCarrier);
-  if (element === undefined) {
-    return;
-  }
   const index = ElementAccessExpression_ArgumentExpression(left);
-  const indexCarrier = index === undefined
-    ? undefined
-    : resolveExpressionCarrier(walk, index, sourceFile, listLengthCarrier);
-  if (!isPythonIntegerCarrier(indexCarrier)) {
+  const element = pythonListElementCarrier(receiverCarrier);
+  if (element !== undefined) {
+    const indexCarrier = index === undefined
+      ? undefined
+      : resolveExpressionCarrier(walk, index, sourceFile, listLengthCarrier);
+    if (!isPythonIntegerCarrier(indexCarrier)) {
+      return;
+    }
+    const valueCarrier = resolveExpressionCarrier(walk, right, sourceFile, element);
+    if (valueCarrier === undefined || !sameCarrier(valueCarrier, element)) {
+      return;
+    }
+    const operationId = "tsonic.python.list.index-write";
+    recordTargetOperation(walk, assignment, operationId, "indexer", "[]=");
+    setPythonOperationFact(walk, assignment, {
+      kind: "list-op",
+      operationId,
+      op: "index-write",
+      resultCarrier: pythonNoneTargetType(),
+    });
     return;
   }
-  const valueCarrier = resolveExpressionCarrier(walk, right, sourceFile, element);
-  if (valueCarrier === undefined || !sameCarrier(valueCarrier, element)) {
-    return;
+  const dictValue = pythonDictValueCarrier(receiverCarrier);
+  if (dictValue !== undefined) {
+    const keyCarrier = index === undefined
+      ? undefined
+      : resolveExpressionCarrier(walk, index, sourceFile, pythonStrTargetType());
+    if (!isPythonStrCarrier(keyCarrier)) {
+      return;
+    }
+    const valueCarrier = resolveExpressionCarrier(walk, right, sourceFile, dictValue);
+    if (valueCarrier === undefined || !sameCarrier(valueCarrier, dictValue)) {
+      return;
+    }
+    const operationId = "tsonic.python.dict.index-write";
+    recordTargetOperation(walk, assignment, operationId, "indexer", "[]=");
+    setPythonOperationFact(walk, assignment, {
+      kind: "dict-op",
+      operationId,
+      op: "index-write",
+      resultCarrier: pythonNoneTargetType(),
+    });
   }
-  const operationId = "tsonic.python.list.index-write";
-  recordTargetOperation(walk, assignment, operationId, "indexer", "[]=");
-  setPythonOperationFact(walk, assignment, {
-    kind: "list-op",
-    operationId,
-    op: "index-write",
-    resultCarrier: pythonNoneTargetType(),
-  });
 }
 
 function recordForOfFacts(
@@ -1160,6 +1403,26 @@ function resolveArrayLiteralCarrier(
     // Sparse literals have no static-native lane.
     return undefined;
   }
+  if (expected !== undefined && isPythonTupleCarrier(expected)) {
+    if (elements.length !== expected.elements.length) {
+      return undefined;
+    }
+    for (const [index, element] of elements.entries()) {
+      const elementExpectation = expected.elements[index];
+      const carrier = elementExpectation === undefined
+        ? undefined
+        : resolveExpressionCarrier(walk, element, sourceFile, elementExpectation);
+      if (carrier === undefined || elementExpectation === undefined || !sameCarrier(carrier, elementExpectation)) {
+        return undefined;
+      }
+    }
+    setPythonOperationFact(walk, expression, {
+      kind: "tuple-literal",
+      operationId: "tsonic.python.tuple.literal",
+      resultCarrier: expected,
+    });
+    return setCarrierFact(walk, expression, expected);
+  }
   let expectedElement = pythonListElementCarrier(expected);
   if (expectedElement === undefined) {
     for (const element of elements) {
@@ -1194,6 +1457,90 @@ function resolveArrayLiteralCarrier(
     length: elements.length,
   });
   return setCarrierFact(walk, expression, resultCarrier);
+}
+
+// Template literals lower to f-strings when every substitution carries a
+// proven str, numeric, or bool carrier; anything else records nothing.
+function resolveTemplateCarrier(
+  walk: PythonFactWalk,
+  expression: Node,
+  sourceFile: SourceFile,
+  expressionKind: string,
+): TargetTypeRef | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  if (expressionKind === KindTemplateExpression) {
+    const spans: Node[] = [];
+    ast.forEachChild(expression, (child) => {
+      if (child !== undefined && ast.kindName(child) === KindTemplateSpan) {
+        spans.push(child);
+      }
+    });
+    for (const span of spans) {
+      const substitution = Node_Expression(span);
+      const carrier = substitution === undefined
+        ? undefined
+        : resolveExpressionCarrier(walk, substitution, sourceFile, undefined);
+      if (carrier === undefined ||
+          (!isPythonStrCarrier(carrier) && !isPythonNumericCarrier(carrier) && !isPythonBoolCarrier(carrier))) {
+        return undefined;
+      }
+    }
+  }
+  setPythonOperationFact(walk, expression, {
+    kind: "string-template",
+    operationId: "tsonic.python.string.template",
+    resultCarrier: pythonStrTargetType(),
+  });
+  return setCarrierFact(walk, expression, pythonStrTargetType());
+}
+
+// Object literals against a proven Record<string, T> expectation lower to
+// dict literals: every entry must be a plain property assignment with an
+// identifier or string-literal key and a value matching the value carrier.
+function resolveDictLiteralCarrier(
+  walk: PythonFactWalk,
+  expression: Node,
+  sourceFile: SourceFile,
+  expected: TargetTypeRef | undefined,
+): TargetTypeRef | undefined {
+  if (expected === undefined || !isPythonDictCarrier(expected)) {
+    return undefined;
+  }
+  const valueCarrier = pythonDictValueCarrier(expected);
+  if (valueCarrier === undefined) {
+    return undefined;
+  }
+  const { ast } = walk.lifecycle.compiler;
+  const seenKeys = new Set<string>();
+  for (const property of ast.properties(expression)) {
+    if (property === undefined || ast.kindName(property) !== KindPropertyAssignment) {
+      return undefined;
+    }
+    const nameNode = ast.name(property);
+    const nameKind = nameNode === undefined ? "" : ast.kindName(nameNode);
+    if (nameNode === undefined || (nameKind !== KindIdentifier && nameKind !== KindStringLiteral)) {
+      return undefined;
+    }
+    const key = ast.text(nameNode);
+    if (key.length === 0 || seenKeys.has(key)) {
+      return undefined;
+    }
+    seenKeys.add(key);
+    const initializer = Node_Initializer(property);
+    const entryCarrier = initializer === undefined
+      ? undefined
+      : resolveExpressionCarrier(walk, initializer, sourceFile, valueCarrier);
+    if (entryCarrier === undefined || !sameCarrier(entryCarrier, valueCarrier)) {
+      return undefined;
+    }
+  }
+  setPythonOperationFact(walk, expression, {
+    kind: "dict-literal",
+    operationId: "tsonic.python.dict.literal",
+    valueCarrier,
+    resultCarrier: expected,
+  });
+  return setCarrierFact(walk, expression, expected);
 }
 
 // --- Project-source types: classes, enums, records ---------------------------
@@ -1940,10 +2287,10 @@ function providerDeclarationIdentityFor(walk: PythonFactWalk, reference: Node): 
 }
 
 function matchProviderRow(
-  rows: readonly PythonProviderOperationRow[],
+  rows: readonly PythonCapabilityOperationRow[],
   identity: ProviderDeclarationIdentity,
-  operationKind: PythonProviderOperationRow["operationKind"],
-): PythonProviderOperationRow | undefined {
+  operationKind: PythonCapabilityOperationRow["operationKind"],
+): PythonCapabilityOperationRow | undefined {
   return rows.find((row) => {
     if (row.operationKind !== operationKind) {
       return false;
@@ -1975,12 +2322,12 @@ function isProviderClassBindingReference(walk: PythonFactWalk, receiver: Node | 
 function providerCallShapeMatchesRow(
   walk: PythonFactWalk,
   receiver: Node | undefined,
-  row: PythonProviderOperationRow,
+  row: PythonCapabilityOperationRow,
 ): boolean {
   return (row.target.form === "static-method") === isProviderClassBindingReference(walk, receiver);
 }
 
-function providerOperationTargetText(target: PythonProviderOperationForm): string {
+function providerOperationTargetText(target: PythonCapabilityOperationForm): string {
   switch (target.form) {
     case "call":
     case "constructor": {
@@ -2002,14 +2349,14 @@ function providerOperationTargetText(target: PythonProviderOperationForm): strin
 function recordProviderOperationFacts(
   walk: PythonFactWalk,
   expression: Node,
-  row: PythonProviderOperationRow,
+  row: PythonCapabilityOperationRow,
   identity: ProviderDeclarationIdentity | undefined,
 ): void {
   const operationId = row.memberId ?? row.signatureId ?? row.exportId;
   const targetOperationText = providerOperationTargetText(row.target);
   recordTargetOperation(walk, expression, operationId, row.operationKind, targetOperationText);
   setPythonOperationFact(walk, expression, {
-    kind: "provider-operation",
+    kind: "capability-operation",
     operationId,
     operationKind: row.operationKind,
     target: row.target,
@@ -2095,12 +2442,12 @@ function appendProviderOperationDiagnostic(
 ): void {
   walk.lifecycle.host.diagnostics.append({
     extensionId: pythonTargetSemanticsExtensionId,
-    extensionCode: "PYTHON_PROVIDER_OPERATION_NOT_MAPPED",
+    extensionCode: "PYTHON_CAPABILITY_OPERATION_NOT_MAPPED",
     numericCode: 0,
     category: "error",
     message: `No Python target operation is mapped for provider declaration '${identity.memberId ?? identity.exportId ?? identity.moduleSpecifier}' (${operationKind}).`,
     evidence: [
-      { message: `target.capability=python.provider.${operationKind}` },
+      { message: `target.capability=python.capability.${operationKind}` },
       { message: `provider.module=${identity.moduleSpecifier}` },
     ],
   });
