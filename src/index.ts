@@ -1,7 +1,5 @@
 export { createPythonTargetPack, pythonTargetId } from "./descriptor/python-target-pack.js";
-export { createTsonicPlugin, readTsonicPluginManifest } from "./plugin.js";
-export type { TsonicCapabilityPluginManifest, TsonicPluginManifest } from "./plugin.js";
-export { validateTsonicCapabilityManifest } from "./plugin.js";
+export { createTsonicPlugin } from "./plugin.js";
 export {
   readPythonOutputType,
   readPythonPackageName,
