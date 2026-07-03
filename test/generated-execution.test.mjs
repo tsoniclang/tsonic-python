@@ -569,6 +569,58 @@ export function triple(value: int32): int32 {
   assert.match(run.stdout, /PY314-OK/u);
 });
 
+test("expansion lanes execute: f-strings, optionals, dicts, tuples, list search", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import type { int32 } from "@tsonic/core/types.js";
+
+export function label(name: string, count: int32): string {
+  return \`\${name}: \${count}\`;
+}
+
+export function fallback(value: string | null): string {
+  if (value === null) {
+    return "none";
+  }
+  return value;
+}
+
+export function bounds(values: int32[], needle: int32): int32 {
+  const table: Record<string, int32> = { low: 1 };
+  table["high"] = 9;
+  const pair: [int32, int32] = [table["low"], table["high"]];
+  if (values.includes(needle)) {
+    return values.indexOf(needle) + pair[0] + pair[1];
+  }
+  return values.indexOf(needle);
+}
+`,
+    },
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_expansion", result.artifacts);
+  runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot });
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "from tsonic_generated.index import bounds, fallback, label",
+    "",
+    'assert label("jobs", 3) == "jobs: 3"',
+    'assert fallback(None) == "none"',
+    'assert fallback("here") == "here"',
+    "assert bounds([4, 5, 6], 5) == 11, bounds([4, 5, 6], 5)",
+    "assert bounds([4, 5, 6], 9) == -1",
+    'print("EXPANSION-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
+  assert.match(run.stdout, /EXPANSION-OK/u);
+});
+
 test("generated modules parse under the python ast module", () => {
   const { result } = compilePython({
     files: {

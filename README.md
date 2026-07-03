@@ -63,6 +63,14 @@ operation rows fail closed. Concrete Python library names live only in
 provider metadata, tests, and package definitions — never in compiler
 branches, which the architecture scanners enforce.
 
+Expansion lanes: template literals with proven str/numeric/bool
+substitutions lower to f-strings; `T | null` lowers to Optional carriers
+(`T | None` annotations, `is None`/`is not None` checks, `None` returns);
+`Record<string, T>` lowers to `dict[str, T]` with literal/read/write lanes;
+TS tuples lower to `tuple[...]` with literal-index reads; dense-list
+`includes`/`indexOf` lower to `in` and the generated `_tsonic_index_of`
+helper for primitive and str element carriers only.
+
 Semantic closure lanes: project-source classes (annotated fields,
 constructor with `self` attribute writes, instance methods, `@staticmethod`
 statics), constant integer enums as `IntEnum` classes with fact-backed member
@@ -75,13 +83,27 @@ reads, C-style `for` loops desugared to `while`, compound assignment and
 `async def`/`await` gated on async lowering facts (calls to async functions
 lower only as await operands).
 
-Stdlib provider packages ship with the pack (`python-math`, `python-pathlib`,
-`python-os`, `python-sys`, `python-datetime`, `python-asyncio`), each exposing
-only closed contracts: module-style calls and constants, a `pathlib.Path`
-class lane (constructor, properties, receiver methods), `datetime.now()` as a
-static-method row, and awaited-only `asyncio.sleep`. `@python/json` is not
-shipped: `loads`/`dumps` traffic in dynamic values with no closed row shape.
-Concrete stdlib names live only in `src/source/provider-packages/stdlib.ts`.
+## Installed plugin architecture
+
+`@tsonic/target-python` is an installed target plugin: `createTsonicPlugin()`
+returns the `TsonicTargetPlugin` contract, validated against the `tsonic`
+manifest in `package.json`. Third-party Python libraries are installed
+target-capability plugins built with `createPythonTargetCapability`:
+capability metadata validates at creation (identity-proven rows, Python
+names, receiver types), manifests validate against the shipped capability,
+and activation is import-driven. Operation rows are a Python-owned contract
+interpreted only by this target — the generic capability operation mapper is
+not the operation interface.
+
+Stdlib capabilities are target-owned (`python-math`, `python-pathlib`,
+`python-os`, `python-sys`, `python-datetime`, `python-asyncio`): the pack
+provider owns their module bindings, so they are always available without
+configuration selection. Each exposes only closed contracts: module-style
+calls and constants, a `pathlib.Path` class lane (constructor, properties,
+receiver methods), `datetime.now()` as a static-method row, and awaited-only
+`asyncio.sleep`. `@python/json` is not shipped: `loads`/`dumps` traffic in
+dynamic values with no closed row shape. Concrete stdlib names live only in
+`src/source/capabilities/stdlib.ts`.
 
 Generated packages carry a PEP 561 `py.typed` marker. Script output supports
 async entry points: an exported async `main` lowers to a `__main__` that runs
