@@ -12,18 +12,15 @@ test("python target pack registers under the python target id", () => {
   assert.equal(pack.displayName, "Python");
 });
 
-test("python target pack declares stdlib provider packages and no surfaces", () => {
+test("python target pack owns stdlib modules and declares no surfaces", () => {
   const pack = createPythonTargetPack();
 
   assert.deepEqual(pack.surfaces, []);
-  assert.deepEqual(pack.packages.map((candidate) => candidate.id), [
-    "python-math",
-    "python-pathlib",
-    "python-os",
-    "python-sys",
-    "python-datetime",
-    "python-asyncio",
-  ]);
+  assert.equal("packages" in pack, false);
+  const prefixes = pack.provider.moduleOwnership.map((entry) => entry.specifierPrefix);
+  for (const specifier of ["@python/math", "@python/pathlib", "@python/os", "@python/sys", "@python/datetime", "@python/asyncio"]) {
+    assert.ok(prefixes.includes(specifier), `provider must own ${specifier}`);
+  }
 });
 
 test("python provider creates the target semantics extension and validates options", () => {
@@ -32,13 +29,16 @@ test("python provider creates the target semantics extension and validates optio
     project: { entryPoint: "src/index.ts", targets: [] },
     target: { id: "python", options: {} },
     targetPack: pack,
-    selectedPackages: [],
+    selectedCapabilities: [],
     selectedSurfaces: [],
   };
 
   const extensions = pack.provider.createExtensions(context);
-  assert.equal(extensions.length, 1);
-  assert.equal(extensions[0].identity.id, "tsonic.python.target-semantics");
+  const ids = extensions.map((extension) => extension.identity.id);
+  assert.equal(ids[ids.length - 1], "tsonic.python.target-semantics");
+  for (const capabilityId of ["python-math", "python-pathlib", "python-os", "python-sys", "python-datetime", "python-asyncio"]) {
+    assert.ok(ids.includes(`tsonic.python.capability.${capabilityId}`), `missing stdlib binding extension for ${capabilityId}`);
+  }
   assert.throws(
     () => pack.provider.createExtensions({ ...context, target: { id: "python", options: { unknown: true } } }),
     /Python target option 'options\.unknown' is not supported\./,

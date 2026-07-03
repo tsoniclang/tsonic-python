@@ -25,7 +25,7 @@ import {
 import { pythonTargetOperationFactKey } from "../../source/python-facts/keys.js";
 import type {
   PythonImportBinding,
-  PythonProviderOperationForm,
+  PythonCapabilityOperationForm,
   PythonTargetOperationFact,
 } from "../../source/python-facts/keys.js";
 import { isPythonFloatCarrier, isPythonIntegerCarrier } from "../../source/python-target-types.js";
@@ -217,7 +217,7 @@ function planIdentifier(node: Node, context: PythonPlanContext): PythonExpressio
   // Identifiers bound to provider operations render from row metadata; a
   // provider-backed identifier must never fall through to a bare name.
   const fact = pythonOperationFact(node, context);
-  if (fact !== undefined && fact.kind === "provider-operation") {
+  if (fact !== undefined && fact.kind === "capability-operation") {
     if (fact.target.form === "static-attribute") {
       return { kind: "attribute", value: importBindingExpression(context, fact.target.import), name: fact.target.name };
     }
@@ -356,7 +356,7 @@ function importBindingExpression(context: PythonPlanContext, binding: PythonImpo
 
 function planProviderOperationExpression(
   context: PythonPlanContext,
-  form: PythonProviderOperationForm,
+  form: PythonCapabilityOperationForm,
   receiverNode: Node | undefined,
   args: readonly PythonExpression[],
 ): PythonExpression | undefined {
@@ -436,12 +436,12 @@ function planCallExpression(node: Node, context: PythonPlanContext): PythonExpre
     }
     return { kind: "call", callee: { kind: "attribute", value: receiver, name: "append" }, args };
   }
-  if (fact !== undefined && fact.kind === "provider-operation") {
+  if (fact !== undefined && fact.kind === "capability-operation") {
     const planned = planProviderOperationExpression(context, fact.target, receiverNode, args);
     if (planned === undefined) {
       context.diagnostics.push(unsupportedConstructDiagnostic(
         diagnosticInput(context, node),
-        "python.provider.call",
+        "python.capability.call",
         "Provider call operation could not be lowered.",
       ));
     }
@@ -538,10 +538,10 @@ function planNewExpression(node: Node, context: PythonPlanContext): PythonExpres
     const args = planArguments(node, context);
     return args === undefined ? undefined : { kind: "call", callee: { kind: "name", name: className }, args };
   }
-  if (fact === undefined || fact.kind !== "provider-operation" || fact.operationKind !== "constructor") {
+  if (fact === undefined || fact.kind !== "capability-operation" || fact.operationKind !== "constructor") {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.constructor",
+      "python.capability.constructor",
       "Constructor expression requires a finalized provider constructor fact.",
     ));
     return undefined;
@@ -554,7 +554,7 @@ function planNewExpression(node: Node, context: PythonPlanContext): PythonExpres
   if (planned === undefined) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.constructor",
+      "python.capability.constructor",
       "Provider constructor operation could not be lowered.",
     ));
   }
@@ -596,10 +596,10 @@ function planPropertyAccess(node: Node, context: PythonPlanContext): PythonExpre
     }
     return { kind: "call", callee: { kind: "name", name: "len" }, args: [receiver] };
   }
-  if (fact === undefined || fact.kind !== "provider-operation") {
+  if (fact === undefined || fact.kind !== "capability-operation") {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.property",
+      "python.capability.property",
       "Property access requires a finalized provider property fact.",
     ));
     return undefined;
@@ -608,7 +608,7 @@ function planPropertyAccess(node: Node, context: PythonPlanContext): PythonExpre
   if (planned === undefined) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.property",
+      "python.capability.property",
       "Provider property operation could not be lowered.",
     ));
   }
@@ -627,10 +627,10 @@ function planElementAccess(node: Node, context: PythonPlanContext): PythonExpres
     const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
     return receiver === undefined ? undefined : { kind: "subscript", value: receiver, index };
   }
-  if (fact === undefined || fact.kind !== "provider-operation") {
+  if (fact === undefined || fact.kind !== "capability-operation") {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.indexer",
+      "python.capability.indexer",
       "Element access requires a finalized provider indexer fact.",
     ));
     return undefined;
@@ -639,7 +639,7 @@ function planElementAccess(node: Node, context: PythonPlanContext): PythonExpres
   if (planned === undefined) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
-      "python.provider.indexer",
+      "python.capability.indexer",
       "Provider indexer operation could not be lowered.",
     ));
   }

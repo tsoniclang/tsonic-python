@@ -4,13 +4,13 @@ import type { ExtensionFactKey, TargetTypeRef } from "@tsonic/tsts";
 export const pythonExtensionId = "tsonic.python";
 
 // Python import binding for a mapped operation. The module/name values come
-// from metadata rows (provider packages), never from source spelling.
+// from metadata rows (target capabilitys), never from source spelling.
 export type PythonImportBinding =
   | { readonly style: "from"; readonly module: string; readonly name: string }
   | { readonly style: "module"; readonly module: string; readonly name?: string };
 
 // Python rendering form for a mapped operation.
-export type PythonProviderOperationForm =
+export type PythonCapabilityOperationForm =
   | { readonly form: "call"; readonly import: PythonImportBinding }
   | { readonly form: "constructor"; readonly import: PythonImportBinding }
   | { readonly form: "method"; readonly name: string }
@@ -46,10 +46,10 @@ export type PythonTargetOperationFact =
       readonly resultCarrier: TargetTypeRef;
     }
   | {
-      readonly kind: "provider-operation";
+      readonly kind: "capability-operation";
       readonly operationId: string;
       readonly operationKind: "method" | "constructor" | "property" | "indexer";
-      readonly target: PythonProviderOperationForm;
+      readonly target: PythonCapabilityOperationForm;
       readonly resultCarrier: TargetTypeRef;
     }
   | {

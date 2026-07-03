@@ -5,20 +5,20 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  acmeAioPackage,
-  acmeFilesPackage,
-  acmeMathPackage,
-  acmePathsPackage,
-  acmePlatformPackage,
+  acmeAioCapability,
+  acmeFilesCapability,
+  acmeMathCapability,
+  acmePathsCapability,
+  acmePlatformCapability,
   compilePython,
   fixturePackagesRoot,
 } from "./helpers/python-session.mjs";
 import {
-  createPythonAsyncioPackage,
-  createPythonMathPackage,
-  createPythonOsPackage,
-  createPythonPathlibPackage,
-} from "../dist/source/provider-packages/stdlib.js";
+  createPythonAsyncioCapability,
+  createPythonMathCapability,
+  createPythonOsCapability,
+  createPythonPathlibCapability,
+} from "../dist/source/capabilities/stdlib.js";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const generatedRoot = join(repositoryRoot, ".temp", "generated");
@@ -73,7 +73,7 @@ export function describe(path: string): string {
 }
 `,
     },
-    packages: [acmeMathPackage(), acmeFilesPackage(), acmePlatformPackage()],
+    capabilities: [acmeMathCapability(), acmeFilesCapability(), acmePlatformCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -297,7 +297,7 @@ export function rename(path: string, ext: string): string {
 }
 `,
     },
-    packages: [acmePathsPackage()],
+    capabilities: [acmePathsCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -333,7 +333,7 @@ export async function load(key: string): Promise<string> {
 }
 `,
     },
-    packages: [acmeAioPackage()],
+    capabilities: [acmeAioCapability()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -388,7 +388,6 @@ export function here(): string {
 }
 `,
     },
-    packages: [createPythonMathPackage(), createPythonPathlibPackage(), createPythonOsPackage()],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -432,7 +431,6 @@ export async function pausedQuadruple(value: int32): Promise<int32> {
 }
 `,
     },
-    packages: [createPythonAsyncioPackage()],
   });
 
   assert.deepEqual(result.diagnostics, []);

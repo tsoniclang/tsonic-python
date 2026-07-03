@@ -8,7 +8,7 @@ import { createTsonicCoreSourceExtension } from "@tsonic/source-core";
 import { createPythonBackend, createPythonTargetPack } from "../../dist/index.js";
 // Deep dist imports keep the helper independent of the root barrel surface.
 import { createPythonCompileInputFromSession } from "../../dist/session/compile-input.js";
-import { createPythonProviderPackage } from "../../dist/source/provider-packages/index.js";
+import { createPythonTargetCapability } from "../../dist/source/capabilities/index.js";
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 export const repositoryRoot = resolve(testDirectory, "../..");
@@ -21,8 +21,8 @@ export const boolCarrier = { kind: "source-primitive", name: "bool" };
 export const envCarrier = { kind: "target-named", id: "acme.platform.Env" };
 export const vectorCarrier = { kind: "target-named", id: "acme.vectors.Vector" };
 
-export function acmeFilesPackage() {
-  return createPythonProviderPackage({
+export function acmeFilesCapability() {
+  return createPythonTargetCapability({
     id: "acme-files",
     displayName: "Acme files",
     version: "1.0.0",
@@ -52,8 +52,8 @@ export function acmeFilesPackage() {
   });
 }
 
-export function acmeMathPackage() {
-  return createPythonProviderPackage({
+export function acmeMathCapability() {
+  return createPythonTargetCapability({
     id: "acme-math",
     displayName: "Acme math",
     version: "1.0.0",
@@ -87,8 +87,8 @@ export function acmeMathPackage() {
   });
 }
 
-export function acmePlatformPackage() {
-  return createPythonProviderPackage({
+export function acmePlatformCapability() {
+  return createPythonTargetCapability({
     id: "acme-platform",
     displayName: "Acme platform",
     version: "1.0.0",
@@ -136,8 +136,8 @@ export const filePathCarrier = { kind: "target-named", id: "acme.paths.FilePath"
 
 // Stdlib-style fixture: a pathlib-shaped class with constructor, instance
 // property, receiver method, and a class-level static attribute.
-export function acmePathsPackage() {
-  return createPythonProviderPackage({
+export function acmePathsCapability() {
+  return createPythonTargetCapability({
     id: "acme-paths",
     displayName: "Acme paths",
     version: "1.0.0",
@@ -213,8 +213,8 @@ export function acmePathsPackage() {
 }
 
 // Async provider fixture: rows marked isAsync lower only as await operands.
-export function acmeAioPackage() {
-  return createPythonProviderPackage({
+export function acmeAioCapability() {
+  return createPythonTargetCapability({
     id: "acme-aio",
     displayName: "Acme aio",
     version: "1.0.0",
@@ -245,8 +245,8 @@ export function acmeAioPackage() {
   });
 }
 
-export function acmeVectorsPackage() {
-  return createPythonProviderPackage({
+export function acmeVectorsCapability() {
+  return createPythonTargetCapability({
     id: "acme-vectors",
     displayName: "Acme vectors",
     version: "1.0.0",
@@ -305,18 +305,20 @@ export function acmeVectorsPackage() {
   });
 }
 
-export function createPythonSession({ files, target = { id: "python", options: {} }, packages = [], packageIds = [], surfaces = [], entryPoint = "index.ts" } = {}) {
+// Structural harness for the installed-plugin contract: stdlib capabilities
+// are target-owned (always active through the pack provider); third-party
+// capabilities are installed plugins passed as selectedCapabilities, with
+// activation driven by source imports resolving their owned modules.
+export function createPythonSession({ files, target = { id: "python", options: {} }, capabilities = [], surfaces = [], entryPoint = "index.ts" } = {}) {
   const pack = createPythonTargetPack();
   const project = { entryPoint, targets: [target] };
-  const packPackages = (pack.packages ?? []).filter((candidate) => packageIds.includes(candidate.id));
-  packages = [...packages, ...packPackages];
   const selectedSurfaces = (pack.surfaces ?? []).filter((surface) => surfaces.includes(surface.id));
   const providerContext = {
     project,
     target,
     targetPack: pack,
     selectedSurfaces,
-    selectedPackages: packages,
+    selectedCapabilities: capabilities,
   };
   const fileMap = new Map(Object.entries(files).map(([name, text]) => [`/src/${name}`, text]));
   const session = createCompilerSessionFromFiles({
@@ -333,8 +335,8 @@ export function createPythonSession({ files, target = { id: "python", options: {
       extensions: [
         createTsonicCoreSourceExtension(),
         ...pack.provider.createExtensions(providerContext),
-        ...packages.flatMap((providerPackage) =>
-          providerPackage.createExtensions?.({ ...providerContext, package: providerPackage }) ?? []),
+        ...capabilities.flatMap((capability) =>
+          capability.createExtensions?.({ ...providerContext, capability }) ?? []),
       ],
     },
   });
@@ -356,15 +358,17 @@ export function checkPythonSession(harness, fileNames) {
   return session.finalizeExtensions();
 }
 
-export function compilePython({ files, target = { id: "python", options: {} }, packages = [], packageIds = [], surfaces = [], entryPoint = "index.ts" }) {
-  const harness = createPythonSession({ files, target, packages, packageIds, surfaces, entryPoint });
+export function compilePython({ files, target = { id: "python", options: {} }, capabilities = [], surfaces = [], entryPoint = "index.ts" }) {
+  const harness = createPythonSession({ files, target, capabilities, surfaces, entryPoint });
   const extensionHost = checkPythonSession(harness);
   const contributionContext = harness.providerContext;
+  const paths = { projectFilePath: "tsonic.json", projectRoot: ".", outputRoot: "out", targetOutputRoot: "out/python" };
   const runtimeReferences = [
     ...(harness.pack.provider.runtimeContributions?.(contributionContext).references ?? []),
     ...harness.providerContext.selectedSurfaces.flatMap((surface) =>
       surface.runtimeContributions?.(contributionContext).references ?? []),
-    ...harness.providerContext.selectedPackages.flatMap((providerPackage) => providerPackage.runtimeContributions?.({}).references ?? []),
+    ...capabilities.flatMap((capability) =>
+      capability.runtimeContributions?.({ ...contributionContext, capability, paths }).references ?? []),
   ];
   const input = createPythonCompileInputFromSession({
     session: harness.session,

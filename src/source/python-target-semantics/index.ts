@@ -106,9 +106,10 @@ import {
   pythonSourceTypeCarrierValue,
   pythonTargetOperationFactKey,
 } from "../python-facts/keys.js";
-import type { PythonProviderOperationForm, PythonTargetOperationFact } from "../python-facts/keys.js";
-import { collectPythonProviderOperationRows } from "../provider-packages/index.js";
-import type { PythonProviderOperationRow } from "../provider-packages/index.js";
+import type { PythonCapabilityOperationForm, PythonTargetOperationFact } from "../python-facts/keys.js";
+import { collectPythonCapabilityOperationRows } from "../capabilities/index.js";
+import { createPythonStdlibCapabilities } from "../capabilities/stdlib.js";
+import type { PythonCapabilityOperationRow } from "../capabilities/index.js";
 import {
   isPythonSignedNumericCarrier,
   pythonOperatorCarrierKey,
@@ -121,7 +122,10 @@ export const pythonTargetSemanticsExtensionId = "tsonic.python.target-semantics"
 
 export function createPythonTargetSemanticsExtension(context: TargetProviderContext): CompilerExtension {
   validatePythonTargetOptions(context.target);
-  const providerRows = collectPythonProviderOperationRows(context.selectedPackages);
+  const providerRows = collectPythonCapabilityOperationRows([
+    ...createPythonStdlibCapabilities(),
+    ...context.selectedCapabilities,
+  ]);
   return {
     identity: {
       id: pythonTargetSemanticsExtensionId,
@@ -146,7 +150,7 @@ export function createPythonTargetSemanticsExtension(context: TargetProviderCont
 
 interface PythonFactWalk {
   readonly lifecycle: ExtensionLifecycleContext;
-  readonly providerRows: readonly PythonProviderOperationRow[];
+  readonly providerRows: readonly PythonCapabilityOperationRow[];
   readonly resolving: Set<object>;
   // Proven project-source type declarations keyed by fileName::typeName. Only
   // registered declarations own source-type lanes; everything else fails
@@ -182,7 +186,7 @@ const KindDecorator = "KindDecorator";
 
 export function recordPythonFactsBeforeFinalization(
   lifecycle: ExtensionLifecycleContext,
-  providerRows: readonly PythonProviderOperationRow[],
+  providerRows: readonly PythonCapabilityOperationRow[],
 ): void {
   const walk: PythonFactWalk = { lifecycle, providerRows, resolving: new Set(), provenSourceTypes: new Map() };
   const { ast } = lifecycle.compiler;
@@ -1024,7 +1028,7 @@ function resolvePropertyAccessCarrier(
       const operationId = "tsonic.python.error.message";
       recordTargetOperation(walk, expression, operationId, "property", "str");
       setPythonOperationFact(walk, expression, {
-        kind: "provider-operation",
+        kind: "capability-operation",
         operationId,
         operationKind: "property",
         target: { form: "builtin-call", name: "str" },
@@ -1940,10 +1944,10 @@ function providerDeclarationIdentityFor(walk: PythonFactWalk, reference: Node): 
 }
 
 function matchProviderRow(
-  rows: readonly PythonProviderOperationRow[],
+  rows: readonly PythonCapabilityOperationRow[],
   identity: ProviderDeclarationIdentity,
-  operationKind: PythonProviderOperationRow["operationKind"],
-): PythonProviderOperationRow | undefined {
+  operationKind: PythonCapabilityOperationRow["operationKind"],
+): PythonCapabilityOperationRow | undefined {
   return rows.find((row) => {
     if (row.operationKind !== operationKind) {
       return false;
@@ -1975,12 +1979,12 @@ function isProviderClassBindingReference(walk: PythonFactWalk, receiver: Node | 
 function providerCallShapeMatchesRow(
   walk: PythonFactWalk,
   receiver: Node | undefined,
-  row: PythonProviderOperationRow,
+  row: PythonCapabilityOperationRow,
 ): boolean {
   return (row.target.form === "static-method") === isProviderClassBindingReference(walk, receiver);
 }
 
-function providerOperationTargetText(target: PythonProviderOperationForm): string {
+function providerOperationTargetText(target: PythonCapabilityOperationForm): string {
   switch (target.form) {
     case "call":
     case "constructor": {
@@ -2002,14 +2006,14 @@ function providerOperationTargetText(target: PythonProviderOperationForm): strin
 function recordProviderOperationFacts(
   walk: PythonFactWalk,
   expression: Node,
-  row: PythonProviderOperationRow,
+  row: PythonCapabilityOperationRow,
   identity: ProviderDeclarationIdentity | undefined,
 ): void {
   const operationId = row.memberId ?? row.signatureId ?? row.exportId;
   const targetOperationText = providerOperationTargetText(row.target);
   recordTargetOperation(walk, expression, operationId, row.operationKind, targetOperationText);
   setPythonOperationFact(walk, expression, {
-    kind: "provider-operation",
+    kind: "capability-operation",
     operationId,
     operationKind: row.operationKind,
     target: row.target,
@@ -2095,12 +2099,12 @@ function appendProviderOperationDiagnostic(
 ): void {
   walk.lifecycle.host.diagnostics.append({
     extensionId: pythonTargetSemanticsExtensionId,
-    extensionCode: "PYTHON_PROVIDER_OPERATION_NOT_MAPPED",
+    extensionCode: "PYTHON_CAPABILITY_OPERATION_NOT_MAPPED",
     numericCode: 0,
     category: "error",
     message: `No Python target operation is mapped for provider declaration '${identity.memberId ?? identity.exportId ?? identity.moduleSpecifier}' (${operationKind}).`,
     evidence: [
-      { message: `target.capability=python.provider.${operationKind}` },
+      { message: `target.capability=python.capability.${operationKind}` },
       { message: `provider.module=${identity.moduleSpecifier}` },
     ],
   });

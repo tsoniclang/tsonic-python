@@ -234,7 +234,7 @@ function planModuleStatements(context: PythonPlanContext): readonly PythonStatem
 }
 
 // Type-only imports are erased. Value imports are erased only when every
-// imported binding is proven (a target binding fact from a provider package,
+// imported binding is proven (a target binding fact from a target capability,
 // or a resolution to a compiled project source module); reference sites
 // re-derive their own structural imports. Anything else, including bare
 // side-effect imports, fails closed.
@@ -305,7 +305,7 @@ function isProvenImportBinding(nameNode: Node, context: PythonPlanContext): bool
 
 // A binding is proven when its (alias-resolved) symbol declarations carry the
 // provider virtual declaration fact: the module is owned by a selected
-// provider package, so reference sites lower through provider-operation facts.
+// target capability, so reference sites lower through provider-operation facts.
 function isProviderDeclaredBinding(nameNode: Node, context: PythonPlanContext): boolean {
   const { input } = context;
   const options = { sourceFile: context.sourceFile };

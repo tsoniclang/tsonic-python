@@ -3,6 +3,10 @@
   "version": "0.0.1",
   "description": "Python target pack for Tsonic",
   "type": "module",
+  "tsonic": {
+    "kind": "target",
+    "target": "python"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": ["dist", "README.md", "LICENSE"],
