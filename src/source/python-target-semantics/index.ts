@@ -94,6 +94,7 @@ import {
   isPythonDictCarrier,
   isPythonExceptionCarrier,
   isPythonIntegerCarrier,
+  isPythonJsonSerializableCarrier,
   isPythonNumericCarrier,
   isPythonOptionalCarrier,
   isPythonStrCarrier,
@@ -1015,7 +1016,8 @@ function resolveCallLikeCarrier(
     return undefined;
   }
   const callArguments = ast.arguments(expression);
-  const providerIdentity = providerDeclarationIdentityFor(walk, callee);
+  const providerIdentity = providerCallSignatureIdentity(walk, expression) ??
+    providerDeclarationIdentityFor(walk, callee);
   if (providerIdentity !== undefined) {
     const operationKind = expressionKind === KindNewExpression ? "constructor" : "method";
     const row = matchProviderRow(walk.providerRows, providerIdentity, operationKind);
@@ -1030,6 +1032,9 @@ function resolveCallLikeCarrier(
     }
     const receiver = ast.kindName(callee) === KindPropertyAccessExpression ? Node_Expression(callee) : undefined;
     if (!providerCallShapeMatchesRow(walk, receiver, row)) {
+      return undefined;
+    }
+    if (!providerArgumentContractHolds(walk, row, callArguments, sourceFile)) {
       return undefined;
     }
     if (receiver !== undefined && row.target.form !== "static-method") {
@@ -2222,7 +2227,8 @@ function tryAsyncProviderAwait(
   sourceFile: SourceFile,
 ): TargetTypeRef | undefined {
   const { ast } = walk.lifecycle.compiler;
-  const providerIdentity = providerDeclarationIdentityFor(walk, callee);
+  const providerIdentity = providerCallSignatureIdentity(walk, operand) ??
+    providerDeclarationIdentityFor(walk, callee);
   if (providerIdentity === undefined) {
     return undefined;
   }
@@ -2232,6 +2238,9 @@ function tryAsyncProviderAwait(
   }
   const receiver = ast.kindName(callee) === KindPropertyAccessExpression ? Node_Expression(callee) : undefined;
   if (!providerCallShapeMatchesRow(walk, receiver, row)) {
+    return undefined;
+  }
+  if (!providerArgumentContractHolds(walk, row, ast.arguments(operand), sourceFile)) {
     return undefined;
   }
   if (receiver !== undefined && row.target.form !== "static-method") {
@@ -2260,6 +2269,52 @@ function safeAliasedSymbol(
   } catch {
     return undefined;
   }
+}
+
+// Overloaded provider exports carry one identity per declared signature; the
+// checker's resolved signature selects which overload owns a call site.
+function providerCallSignatureIdentity(walk: PythonFactWalk, callLike: Node): ProviderDeclarationIdentity | undefined {
+  const { checker } = walk.lifecycle.compiler;
+  try {
+    const signature = checker.getResolvedSignature(callLike);
+    if (signature === undefined) {
+      return undefined;
+    }
+    const declaration = checker.getSignatureDeclaration(signature);
+    if (declaration === undefined) {
+      return undefined;
+    }
+    const fact = walk.lifecycle.host.facts.get(declaration, providerVirtualDeclarationFactKey);
+    return fact === undefined ? undefined : (fact as ProviderDeclarationIdentity);
+  } catch {
+    return undefined;
+  }
+}
+
+// Rows with an argument contract prove every argument carrier before any
+// fact lands; an unprovable argument records nothing.
+function providerArgumentContractHolds(
+  walk: PythonFactWalk,
+  row: PythonCapabilityOperationRow,
+  callArguments: readonly (Node | undefined)[],
+  sourceFile: SourceFile,
+): boolean {
+  if (row.argumentContract === undefined) {
+    return true;
+  }
+  if (callArguments.length === 0) {
+    return false;
+  }
+  for (const [index, argument] of callArguments.entries()) {
+    if (argument === undefined) {
+      return false;
+    }
+    const argumentCarrier = resolveExpressionCarrier(walk, argument, sourceFile, row.parameterCarriers?.[index]);
+    if (argumentCarrier === undefined || !isPythonJsonSerializableCarrier(argumentCarrier)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function providerDeclarationIdentityFor(walk: PythonFactWalk, reference: Node): ProviderDeclarationIdentity | undefined {

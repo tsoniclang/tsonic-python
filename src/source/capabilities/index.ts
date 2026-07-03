@@ -40,6 +40,10 @@ export interface PythonCapabilityOperationRow {
   // Async provider operations lower only as await operands; the result
   // carrier is the awaited payload. Supported on method rows only.
   readonly isAsync?: boolean;
+  // Rows with an argument contract record facts only when every argument
+  // resolves a proven carrier accepted by the named contract; anything else
+  // records nothing and fails closed. Supported on method rows only.
+  readonly argumentContract?: "json-serializable";
 }
 
 export interface PythonCapabilityDependency {
@@ -164,6 +168,9 @@ function validatePythonCapabilityDefinition(definition: PythonCapabilityDefiniti
     }
     if (row.isAsync === true && row.operationKind !== "method") {
       throw new Error(`Target capability '${packageId}': isAsync is supported only on method operations (row '${rowLabel}').`);
+    }
+    if (row.argumentContract !== undefined && row.operationKind !== "method") {
+      throw new Error(`Target capability '${packageId}': argument contracts are supported only on method operations (row '${rowLabel}').`);
     }
     const receiverForms = new Set(["method", "property", "index", "builtin-call"]);
     if (receiverForms.has(row.target.form) && (row.receiverTypeId === undefined || row.receiverTypeId.length === 0)) {

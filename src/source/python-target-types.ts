@@ -140,3 +140,35 @@ export function pythonTupleTargetType(elements: readonly TargetTypeRef[]): Targe
 export function isPythonTupleCarrier(carrier: TargetTypeRef | undefined): carrier is Extract<TargetTypeRef, { kind: "tuple" }> {
   return carrier?.kind === "tuple" && carrier.elements.length > 0;
 }
+
+// JSON-native carrier shapes for the closed json contract: str and mapped
+// primitives serialize directly; list elements and dict values stay
+// primitive/str; tuple elements and Optional payloads recurse. Everything
+// else (classes, records, exceptions, unproven values) is rejected.
+export function isPythonJsonPrimitiveCarrier(carrier: TargetTypeRef | undefined): boolean {
+  if (isPythonStrCarrier(carrier)) {
+    return true;
+  }
+  return carrier?.kind === "source-primitive" && pythonPrimitiveTypeName(carrier.name) !== undefined;
+}
+
+export function isPythonJsonSerializableCarrier(carrier: TargetTypeRef | undefined): boolean {
+  if (isPythonJsonPrimitiveCarrier(carrier)) {
+    return true;
+  }
+  if (isPythonOptionalCarrier(carrier)) {
+    const inner = pythonOptionalInnerCarrier(carrier);
+    return inner !== undefined && isPythonJsonSerializableCarrier(inner);
+  }
+  if (isPythonListCarrier(carrier)) {
+    return isPythonJsonPrimitiveCarrier(carrier.element);
+  }
+  const dictValue = pythonDictValueCarrier(carrier);
+  if (dictValue !== undefined) {
+    return isPythonJsonPrimitiveCarrier(dictValue);
+  }
+  if (isPythonTupleCarrier(carrier)) {
+    return carrier.elements.every((element) => isPythonJsonSerializableCarrier(element));
+  }
+  return false;
+}

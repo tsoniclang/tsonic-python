@@ -98,13 +98,16 @@ interpreted only by this target — the generic capability operation mapper is
 not the operation interface.
 
 Stdlib capabilities are target-owned (`python-math`, `python-pathlib`,
-`python-os`, `python-sys`, `python-datetime`, `python-asyncio`): the pack
+`python-os`, `python-sys`, `python-datetime`, `python-asyncio`,
+`python-json`): the pack
 provider owns their module bindings, so they are always available without
 configuration selection. Each exposes only closed contracts: module-style
 calls and constants, a `pathlib.Path` class lane (constructor, properties,
-receiver methods), `datetime.now()` as a static-method row, and awaited-only
-`asyncio.sleep`. `@python/json` is not shipped: `loads`/`dumps` traffic in
-dynamic values with no closed row shape. Concrete stdlib names live only in
+receiver methods), `datetime.now()` as a static-method row, awaited-only
+`asyncio.sleep`, and `json.dumps` gated by a json-serializable argument
+contract (str, mapped primitives, `list`/`dict[str, T]` of primitives,
+tuples and Optionals of accepted shapes, recursively). `json.loads` is not
+shipped: its return shape is dynamic. Concrete stdlib names live only in
 `src/source/capabilities/stdlib.ts`.
 
 Generated packages carry a PEP 561 `py.typed` marker. Script output supports
@@ -126,6 +129,48 @@ template literals with unproven substitutions, class
 inheritance/generics/accessors, string enums, enum ordering comparisons,
 and the `compat` typescript-compatibility mode (which requires the
 `python-js` runtime package and is rejected at option validation).
+
+## Lane ledger
+
+Complete (fact-backed, runtime-proven):
+
+- Static-native spine: functions, parameters, locals, returns, if/elif/else,
+  while, for-of, C-style for desugaring, operators with the truncating
+  integer contract, string concat/equality
+- Classes, constant integer enums, record dataclasses, object/array
+  destructuring, error model, async/await, async script entry
+- Template literals to f-strings, Optional/None, dict[str, T], tuples,
+  dense-list includes/indexOf, typed json.dumps over closed carriers
+- Installed plugin product path: generic host discovery, target
+  registration, third-party capability plugins with import-driven
+  activation and duplicate-ownership rejection
+- GPU host integration consuming the tsonic-gpu host artifact contract with
+  gpu-triton kernel modules, wrapper re-exports, and dependency merge
+- Packaging: wheel-ready layout, py.typed, deterministic ordering,
+  interpreter gates (3.12/3.13/3.14; absent interpreters are explicit
+  environment skips)
+
+Hard-reject (fail closed by design, no external dependency):
+
+- json.dumps of class instances and generated dataclass records (no sound
+  serialization without a dedicated conversion lane); json.loads (dynamic
+  return shape); json.dumps of direct object/array literal arguments (no
+  contextual carrier — bind to a typed local first)
+- Sparse arrays, .length writes, at(), non-primitive includes/indexOf
+- Class inheritance, generics, accessors, parameter properties, static
+  fields; string enums; enum ordering comparisons
+- continue inside desugared C-style for; unawaited async calls; tuple
+  access with non-literal indexes; source names in the generated-helper
+  namespace
+
+Blocked by external contract:
+
+- JS compatibility semantics (undefined, sparse arrays, JS equality,
+  dynamic carriers, compat mode): blocked on the python-js runtime package
+- Variadic stdlib APIs (os.path.join and similar): blocked on TSTS
+  variadic parameter carriers
+- Promise/awaitable provider declarations: blocked on a promise kind in
+  the TSTS provider type grammar (async rows declare the payload type)
 
 ## Build and test
 

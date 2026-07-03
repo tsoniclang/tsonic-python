@@ -9,11 +9,13 @@ import { missingRuntimeReferenceDiagnostic } from "./diagnostics.js";
 export const pythonPackageReferenceKind = "python-package";
 
 // PEP 508 distribution name and a conservative version character shape (a
-// strict subset of PEP 440; not full PEP 440 validation). Names or versions
-// outside these shapes are rejected, never passed through to pyproject
-// dependency strings.
+// strict subset of PEP 440; not full PEP 440 validation). A version value
+// may carry a single leading comparator (>=3.0 style constraints from host
+// contributions); a bare value pins with ==. Names or versions outside
+// these shapes are rejected, never passed through to pyproject dependency
+// strings.
 const pythonPackageNamePattern = /^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$/u;
-const pythonPackageVersionPattern = /^[0-9][0-9A-Za-z.!+]*$/u;
+const pythonPackageVersionPattern = /^(==|!=|<=|>=|~=|<|>)?[0-9][0-9A-Za-z.!+]*$/u;
 
 export interface PythonDependency {
   readonly name: string;

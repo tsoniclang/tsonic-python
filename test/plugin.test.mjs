@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
@@ -25,53 +25,102 @@ test("createTsonicPlugin carries the target identity", () => {
   assert.equal("packages" in pack, false);
 });
 
-test("host discovery loads the installed package layout end to end", () => {
-  // Simulated installed project: @tsonic/target-python in node_modules,
-  // driven the way host discovery drives it — package.json resolved through
-  // package exports, manifest validated, entry imported, plugin created,
-  // and the pack registered.
-  const projectRoot = join(repositoryRoot, ".temp", "installed-layout");
+test("real host discovery loads, registers, compiles, and executes from installed layout", async () => {
+  // Simulated installed project: the target plugin and a third-party
+  // capability plugin in node_modules, discovered by the REAL host
+  // discovery path — no Python-special discovery code.
+  const projectRoot = join(repositoryRoot, ".temp", "installed-project");
   rmSync(projectRoot, { recursive: true, force: true });
   mkdirSync(join(projectRoot, "node_modules", "@tsonic"), { recursive: true });
+  mkdirSync(join(projectRoot, "node_modules", "@acme"), { recursive: true });
   symlinkSync(repositoryRoot, join(projectRoot, "node_modules", "@tsonic", "target-python"), "dir");
+  cpSync(
+    join(repositoryRoot, "test", "fixtures", "npm", "acme-tsonic-python-files"),
+    join(projectRoot, "node_modules", "@acme", "tsonic-python-files"),
+    { recursive: true },
+  );
   writeFileSync(join(projectRoot, "package.json"), JSON.stringify({
-    name: "installed-layout-proof",
+    name: "installed-project-proof",
     private: true,
     type: "module",
-    dependencies: { "@tsonic/target-python": "0.0.1" },
+    dependencies: {
+      "@tsonic/target-python": "0.0.1",
+      "@acme/tsonic-python-files": "1.0.0",
+    },
   }, null, 2));
-  writeFileSync(join(projectRoot, "probe.mjs"), [
-    'import { createRequire } from "node:module";',
-    'import { pathToFileURL } from "node:url";',
+
+  const { discoverInstalledTsonicPlugins } = await import("@tsonic/host");
+  const registry = await discoverInstalledTsonicPlugins(join(projectRoot, "package.json"));
+
+  assert.deepEqual(registry.diagnostics, []);
+  assert.deepEqual(registry.targets.map((plugin) => plugin.id), ["@tsonic/target-python"]);
+  assert.deepEqual(registry.capabilities.map((capability) => capability.id), ["@acme/tsonic-python-files"]);
+
+  const targetRegistry = registry.createTargetRegistry();
+  const pack = targetRegistry.get("python");
+  assert.ok(pack);
+  assert.equal(pack.displayName, "Python");
+
+  // Selection through compile through execution, using the discovered
+  // capability object exactly as the host would select it.
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import { readText } from "@acme/files";
+
+export function load(path: string): string {
+  return readText(path) + "!";
+}
+`,
+    },
+    capabilities: [...registry.capabilities],
+  });
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(artifactText(result, "src/tsonic_generated/index.py"), /from acme_files import read_text/u);
+  const pyproject = artifactText(result, "pyproject.toml");
+  assert.match(pyproject, /"acme-files",/u);
+
+  const generatedRoot = join(projectRoot, "generated");
+  for (const artifact of result.artifacts) {
+    const filePath = join(generatedRoot, artifact.path);
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, artifact.text);
+  }
+  const noteFile = join(generatedRoot, "note.txt");
+  writeFileSync(noteFile, "installed-hello");
+  const runnerFile = join(generatedRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "from tsonic_generated.index import load",
     "",
-    'const requireFromProject = createRequire(new URL("./package.json", import.meta.url));',
-    "",
-    'const manifestPath = requireFromProject.resolve("@tsonic/target-python/package.json");',
-    'const packageJson = JSON.parse((await import("node:fs")).readFileSync(manifestPath, "utf8"));',
-    "const manifest = packageJson.tsonic;",
-    'if (manifest.kind !== "plugin") throw new Error("manifest kind must be plugin");',
-    'if (manifest.contractVersion !== 1) throw new Error("unsupported contract version");',
-    'if (typeof manifest.entry !== "string" || manifest.entry.length === 0) throw new Error("missing entry");',
-    "",
-    'const entryPath = requireFromProject.resolve(manifest.entry === "." ? "@tsonic/target-python" : `@tsonic/target-python/${manifest.entry}`);',
-    "const module = await import(pathToFileURL(entryPath).href);",
-    'if (typeof module.createTsonicPlugin !== "function") throw new Error("entry must export createTsonicPlugin()");',
-    "",
-    "const plugin = module.createTsonicPlugin();",
-    'if (plugin.kind !== "target") throw new Error("plugin kind must be target");',
-    'if (plugin.targetId !== "python") throw new Error("plugin targetId must be python");',
-    "",
-    'const { createTargetRegistry } = await import(pathToFileURL(requireFromProject.resolve("@tsonic/target-api")).href);',
-    "const registry = createTargetRegistry([plugin.createTargetPack()]);",
-    'const pack = registry.get("python");',
-    'if (pack === undefined || pack.id !== "python") throw new Error("target did not register");',
-    'console.log("DISCOVERY-OK", plugin.id, pack.displayName);',
+    `assert load(${JSON.stringify(noteFile)}) == "installed-hello!"`,
+    'print("INSTALLED-OK")',
     "",
   ].join("\n"));
-
-  const run = spawnSync(process.execPath, [join(projectRoot, "probe.mjs")], { encoding: "utf8" });
+  const run = spawnSync("python3", [runnerFile], {
+    cwd: generatedRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PYTHONPATH: [join(generatedRoot, "src"), join(repositoryRoot, "test", "fixtures", "pypackages")].join(":"),
+    },
+  });
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
-  assert.match(run.stdout, /DISCOVERY-OK @tsonic\/target-python Python/u);
+  assert.match(run.stdout, /INSTALLED-OK/u);
+});
+
+test("duplicate capability module ownership fails closed", async () => {
+  const { discoverInstalledTsonicPlugins } = await import("@tsonic/host");
+  const projectRoot = join(repositoryRoot, ".temp", "installed-project");
+  const registry = await discoverInstalledTsonicPlugins(join(projectRoot, "package.json"));
+  const duplicate = { ...registry.capabilities[0], id: "@acme/tsonic-python-files-clone" };
+
+  assert.throws(
+    () => compilePython({
+      files: { "index.ts": "export function idle(): void {}\n" },
+      capabilities: [...registry.capabilities, duplicate],
+    }),
+    /claims module '@acme\/files', already owned by '@acme\/tsonic-python-files'/u,
+  );
 });
 
 test("capability plugins expose the installed capability contract", () => {

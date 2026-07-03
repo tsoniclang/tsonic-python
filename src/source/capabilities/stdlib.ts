@@ -1,4 +1,4 @@
-import type { TargetTypeRef } from "@tsonic/tsts";
+import type { ProviderTypeExpression, TargetTypeRef } from "@tsonic/tsts";
 import { createPythonTargetCapability } from "./index.js";
 import type { PythonTargetCapability } from "./index.js";
 import {
@@ -7,7 +7,7 @@ import {
   pythonStrTargetType,
 } from "../python-target-types.js";
 
-// Product target capabilitys for the Python standard library. Closed
+// Product target capabilities for the Python standard library. Closed
 // contracts only: every operation row lowers through an existing lane
 // (call/constructor/method/property/static-attribute/static-method/await).
 // Concrete Python module and attribute names live here and nowhere else in
@@ -453,9 +453,68 @@ export function createPythonAsyncioCapability(): PythonTargetCapability {
   });
 }
 
-// The json module ships no rows: `json.loads` returns a dynamic value and
-// `json.dumps` accepts one, so no closed row shape exists. Typed record/list
-// carriers are the only sound basis for a json contract.
+// Typed JSON closure: `dumps` accepts only shapes whose carriers are
+// natively serializable in generated Python (primitives/str, list and dict
+// of primitives/str, tuples and Optionals of accepted shapes). Every dumps
+// row carries the json-serializable argument contract, so the semantics
+// lane proves the argument carrier before any fact lands — `any`/`unknown`
+// values, class instances, and generated records stay fail-closed.
+// `loads` ships no row: its return shape is dynamic.
+export function createPythonJsonCapability(): PythonTargetCapability {
+  const dumpsCall = { form: "call", import: { style: "module", module: "json", name: "dumps" } } as const;
+  const dumpsSignature = (label: string, type: ProviderTypeExpression) => ({
+    id: `@python/json::dumps(value:${label})`,
+    name: "dumps",
+    parameters: [{ name: "value", type }],
+    returnType: { kind: "string" as const },
+  });
+  const dumpsRow = (label: string, parameterCarriers?: readonly TargetTypeRef[]) => ({
+    exportId: "@python/json::dumps",
+    signatureId: `@python/json::dumps(value:${label})`,
+    operationKind: "method" as const,
+    target: dumpsCall,
+    resultCarrier: strCarrier,
+    ...(parameterCarriers === undefined ? {} : { parameterCarriers }),
+    argumentContract: "json-serializable" as const,
+  });
+  return createPythonTargetCapability({
+    id: "python-json",
+    displayName: "Python stdlib: json",
+    version: stdlibVersion,
+    modules: [{
+      moduleSpecifier: "@python/json",
+      providerModuleId: "python.json",
+      exports: [{
+        id: "@python/json::dumps",
+        name: "dumps",
+        kind: "function",
+        // Overload order matters: exact primitive shapes first, then the
+        // array shape (which also admits tuples), then the wide fallback
+        // that admits dict, Optional, and tuple-of-mixed values whose
+        // carriers the argument contract proves.
+        signatures: [
+          dumpsSignature("string", { kind: "string" }),
+          dumpsSignature("number", { kind: "number" }),
+          dumpsSignature("boolean", { kind: "boolean" }),
+          dumpsSignature("array", {
+            kind: "array",
+            elementType: { kind: "union", types: [{ kind: "string" }, { kind: "number" }, { kind: "boolean" }] },
+          }),
+          dumpsSignature("unknown", { kind: "unknown" }),
+        ],
+      }],
+    }],
+    operations: [
+      dumpsRow("string", [strCarrier]),
+      dumpsRow("number", [floatCarrier]),
+      dumpsRow("boolean", [pythonSourcePrimitiveTargetType("bool")]),
+      dumpsRow("array"),
+      dumpsRow("unknown"),
+    ],
+    dependencies: [],
+  });
+}
+
 export function createPythonStdlibCapabilities(): readonly PythonTargetCapability[] {
   return [
     createPythonMathCapability(),
@@ -464,5 +523,6 @@ export function createPythonStdlibCapabilities(): readonly PythonTargetCapabilit
     createPythonSysCapability(),
     createPythonDatetimeCapability(),
     createPythonAsyncioCapability(),
+    createPythonJsonCapability(),
   ];
 }
