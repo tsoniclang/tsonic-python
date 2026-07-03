@@ -57,7 +57,7 @@ test("python target options reject invalid values", () => {
   assert.throws(() => readPythonPackageName(target({ packageName: "" })), /non-empty string/);
   assert.throws(() => readPythonPackageName(target({ packageName: "match" })), /reserved Python name/);
   assert.throws(() => readPythonPackageName(target({ packageName: "import" })), /reserved Python name/);
-  assert.throws(() => readPythonVersion(target({ pythonVersion: "3.11" })), /'3\.12' or '3\.13'/);
+  assert.throws(() => readPythonVersion(target({ pythonVersion: "3.11" })), /'3\.12', '3\.13', or '3\.14'/);
   assert.throws(() => readPythonOutputType(target({ outputType: "Exe" })), /'package' or 'script'/);
   assert.throws(
     () => readPythonTypescriptCompatibilityMode(target({ typescriptCompatibility: "loose" })),

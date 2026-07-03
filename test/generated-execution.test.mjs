@@ -529,6 +529,46 @@ export async function main(): Promise<void> {
   });
 });
 
+test("python 3.14 target compiles, imports, and runs under the local 3.14 interpreter", () => {
+  const target = { id: "python", options: { pythonVersion: "3.14", packageName: "py314_proof" } };
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import type { int32 } from "@tsonic/core/types.js";
+
+export function triple(value: int32): int32 {
+  return value * 3;
+}
+`,
+    },
+    target,
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const pyproject = result.artifacts.find((artifact) => artifact.path === "pyproject.toml");
+  assert.match(pyproject.text, /requires-python = ">=3\.14"/u);
+  assert.match(pyproject.text, /target-version = "py314"/u);
+
+  const versionCheck = runPython(["-c", "import sys; assert sys.version_info[:2] >= (3, 14); print(sys.version_info[:2])"]);
+  assert.match(versionCheck.stdout, /\(3, 1[4-9]\)/u);
+
+  const projectRoot = materialize("exec_py314", result.artifacts);
+  runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot });
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "from py314_proof.index import triple",
+    "",
+    "assert triple(14) == 42",
+    'print("PY314-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], {
+    cwd: projectRoot,
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
+  assert.match(run.stdout, /PY314-OK/u);
+});
+
 test("generated modules parse under the python ast module", () => {
   const { result } = compilePython({
     files: {

@@ -3,6 +3,7 @@ import type { PyprojectManifestPlan } from "../backend/planner/pyproject.js";
 const ruffTargetVersionByPythonVersion = {
   "3.12": "py312",
   "3.13": "py313",
+  "3.14": "py314",
 } as const;
 
 export function printPyprojectManifest(manifest: PyprojectManifestPlan): string {

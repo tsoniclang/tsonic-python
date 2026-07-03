@@ -1,7 +1,24 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { mergePythonHostArtifacts } from "../dist/index.js";
 import { compilePython } from "./helpers/python-session.mjs";
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+function materializeHost(name, artifacts) {
+  const projectRoot = join(repositoryRoot, ".temp", "generated", name);
+  rmSync(projectRoot, { recursive: true, force: true });
+  for (const artifact of artifacts) {
+    const filePath = join(projectRoot, artifact.path);
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, artifact.text);
+  }
+  return projectRoot;
+}
 
 const target = { id: "python", options: {} };
 
@@ -77,6 +94,67 @@ test("failed compiles never receive host artifacts", () => {
   });
   assert.equal(merged.artifacts.length, 0);
   assert.equal(merged.diagnostics.length, 1);
+});
+
+test("conflicting host dependency versions fail closed", () => {
+  const base = compiledBase();
+  const merged = mergePythonHostArtifacts({
+    target,
+    runtimeReferences: [],
+    compileResult: base,
+    contributions: [
+      { modules: [], dependencies: [{ name: "triton", version: "3.0.0" }] },
+      { modules: [], dependencies: [{ name: "triton", version: "3.1.0" }] },
+    ],
+  });
+  assert.equal(merged.artifacts.length, 0);
+  assert.equal(merged.diagnostics[0].code, "PYTHON_UNSUPPORTED_RUNTIME_REFERENCE");
+});
+
+test("merged host kernels place deterministically and import at runtime", () => {
+  const merged = mergePythonHostArtifacts({
+    target,
+    runtimeReferences: [],
+    compileResult: compiledBase(),
+    contributions: [
+      {
+        modules: [
+          { name: "zeta_kernel", language: "python", text: "def launch():\n    return 7\n" },
+          { name: "alpha_kernel", language: "python", text: "def launch():\n    return 5\n" },
+        ],
+        dependencies: [],
+      },
+    ],
+  });
+
+  assert.deepEqual(merged.diagnostics, []);
+  const kernelPaths = merged.artifacts
+    .map((artifact) => artifact.path)
+    .filter((path) => path.includes("/kernels/") && !path.endsWith("__init__.py"));
+  assert.deepEqual(kernelPaths, [
+    "src/tsonic_generated/kernels/alpha_kernel.py",
+    "src/tsonic_generated/kernels/zeta_kernel.py",
+  ]);
+
+  const projectRoot = materializeHost("exec_host_kernels", merged.artifacts);
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "from tsonic_generated.kernels import alpha_kernel, zeta_kernel",
+    "from tsonic_generated.index import host",
+    "",
+    "assert alpha_kernel.launch() == 5",
+    "assert zeta_kernel.launch() == 7",
+    "assert host(1) == 2",
+    'print("HOST-KERNELS-OK")',
+    "",
+  ].join("\n"));
+  const run = spawnSync("python3", [runnerFile], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
+  });
+  assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+  assert.match(run.stdout, /HOST-KERNELS-OK/u);
 });
 
 test("unsupported host requests fail closed with zero artifacts", () => {

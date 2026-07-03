@@ -6,7 +6,7 @@ import { pythonReservedIdentifiers } from "../common/python-names.js";
 
 export type PythonOutputType = "package" | "script";
 
-export type PythonVersion = "3.12" | "3.13";
+export type PythonVersion = "3.12" | "3.13" | "3.14";
 
 const supportedPythonTargetOptionKeys = Object.freeze([
   "outputType",
@@ -53,8 +53,8 @@ export function readPythonVersion(target: TargetSelection): PythonVersion {
   if (value === undefined) {
     return "3.12";
   }
-  if (value !== "3.12" && value !== "3.13") {
-    throw new Error("Python target option 'pythonVersion' must be either '3.12' or '3.13'.");
+  if (value !== "3.12" && value !== "3.13" && value !== "3.14") {
+    throw new Error("Python target option 'pythonVersion' must be '3.12', '3.13', or '3.14'.");
   }
   return value;
 }
