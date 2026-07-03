@@ -31,7 +31,7 @@ export type PythonCapabilityOperationForm =
       readonly name: string;
     };
 
-export type PythonListOperation = "index-read" | "index-write" | "len" | "append";
+export type PythonListOperation = "index-read" | "index-write" | "len" | "append" | "includes" | "index-of";
 
 export type PythonTargetOperationFact =
   | {
@@ -122,6 +122,38 @@ export type PythonTargetOperationFact =
   | {
       readonly kind: "await-op";
       readonly operationId: string;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      // Template literal whose parts all carry proven str/numeric/bool
+      // carriers: lowers to an f-string.
+      readonly kind: "string-template";
+      readonly operationId: string;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      // Object literal with a proven Record<string, T> carrier: lowers to a
+      // dict literal.
+      readonly kind: "dict-literal";
+      readonly operationId: string;
+      readonly valueCarrier: TargetTypeRef;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      readonly kind: "dict-op";
+      readonly operationId: string;
+      readonly op: "index-read" | "index-write";
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      readonly kind: "tuple-literal";
+      readonly operationId: string;
+      readonly resultCarrier: TargetTypeRef;
+    }
+  | {
+      readonly kind: "tuple-index";
+      readonly operationId: string;
+      readonly index: number;
       readonly resultCarrier: TargetTypeRef;
     };
 

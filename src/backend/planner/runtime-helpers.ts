@@ -81,12 +81,47 @@ const intRemHelper: PythonStatement = {
   ],
 };
 
+// JS indexOf semantics: first strict-equal position or -1. Python's
+// list.index raises on absence, so the helper scans explicitly.
+const indexOfHelper: PythonStatement = {
+  kind: "function-def",
+  name: pythonHelperNames["index-of"],
+  params: [
+    { name: "items", annotation: { kind: "name", name: "list" } },
+    { name: "value", annotation: { kind: "name", name: "object" } },
+  ],
+  returns: intAnnotation,
+  body: [
+    {
+      kind: "for",
+      targetName: "index",
+      iterable: {
+        kind: "call",
+        callee: name("range"),
+        args: [{ kind: "call", callee: name("len"), args: [name("items")] }],
+      },
+      body: [{
+        kind: "if",
+        condition: {
+          kind: "binary",
+          operator: "==",
+          left: { kind: "subscript", value: name("items"), index: name("index") },
+          right: name("value"),
+        },
+        body: [{ kind: "return", expression: name("index") }],
+      }],
+    },
+    { kind: "return", expression: { kind: "unary", operator: "-", operand: { kind: "int-literal", text: "1" } } },
+  ],
+};
+
 const helperStatements: Readonly<Record<PythonRuntimeHelper, PythonStatement>> = {
   "int-div": intDivHelper,
   "int-rem": intRemHelper,
+  "index-of": indexOfHelper,
 };
 
-const helperEmissionOrder: readonly PythonRuntimeHelper[] = ["int-div", "int-rem"];
+const helperEmissionOrder: readonly PythonRuntimeHelper[] = ["index-of", "int-div", "int-rem"];
 
 export function pythonHelperDefinitions(helpers: ReadonlySet<PythonRuntimeHelper>): readonly PythonStatement[] {
   return helperEmissionOrder

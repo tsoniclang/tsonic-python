@@ -194,6 +194,8 @@ export function printPythonTypeAnnotation(annotation: PythonTypeAnnotation): str
       return annotation.name;
     case "subscript":
       return `${annotation.name}[${annotation.arguments.map(printPythonTypeAnnotation).join(", ")}]`;
+    case "optional":
+      return `${printPythonTypeAnnotation(annotation.inner)} | None`;
     case "none":
       return "None";
     default:
@@ -216,6 +218,10 @@ const enum PythonPrecedence {
 const binaryOperatorPrecedence: Readonly<Record<PythonBinaryOperator, PythonPrecedence>> = {
   or: PythonPrecedence.Or,
   and: PythonPrecedence.And,
+  in: PythonPrecedence.Comparison,
+  "not in": PythonPrecedence.Comparison,
+  is: PythonPrecedence.Comparison,
+  "is not": PythonPrecedence.Comparison,
   "==": PythonPrecedence.Comparison,
   "!=": PythonPrecedence.Comparison,
   "<": PythonPrecedence.Comparison,
@@ -279,6 +285,17 @@ export function printPythonExpression(expression: PythonExpression): string {
     }
     case "await":
       return `await ${printOperand(expression.operand, PythonPrecedence.Unary)}`;
+    case "f-string":
+      return printFString(expression.parts);
+    case "dict":
+      return `{${expression.entries.map((entry) => `${printPythonExpression(entry.key)}: ${printPythonExpression(entry.value)}`).join(", ")}}`;
+    case "tuple": {
+      if (expression.elements.length === 0) {
+        return failUnsupportedPythonSyntax(expression, "expression");
+      }
+      const printed = expression.elements.map(printPythonExpression);
+      return expression.elements.length === 1 ? `(${printed[0]},)` : `(${printed.join(", ")})`;
+    }
     case "subscript":
       return `${printOperand(expression.value, PythonPrecedence.Primary)}[${printPythonExpression(expression.index)}]`;
     case "list":
@@ -336,4 +353,23 @@ export function failUnsupportedPythonSyntax(node: unknown, category: string): ne
     ? String((node as { readonly kind: unknown }).kind)
     : "<missing-kind>";
   throw new Error(`Unsupported Python ${category} syntax reached printer: ${kind}`);
+}
+
+// f-strings print double-quoted; literal text escapes quotes/backslashes and
+// doubles braces. Field expressions must not contain characters that cannot
+// appear inside an f-string replacement field.
+function printFString(parts: readonly import("../backend/python-ast/nodes.js").PythonFStringPart[]): string {
+  let out = 'f"';
+  for (const part of parts) {
+    if (part.kind === "text") {
+      out += escapePythonString(part.text).slice(1, -1).replace(/\{/gu, "{{").replace(/\}/gu, "}}");
+      continue;
+    }
+    const field = printPythonExpression(part.expression);
+    if (field.includes('"') || field.includes("\\") || field.includes("\n") || field.includes("{") || field.includes("}")) {
+      return failUnsupportedPythonSyntax(part.expression, "f-string field");
+    }
+    out += `{${field}}`;
+  }
+  return `${out}"`;
 }

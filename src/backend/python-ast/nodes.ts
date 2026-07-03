@@ -15,7 +15,11 @@ export type PythonBinaryOperator =
   | ">"
   | ">="
   | "and"
-  | "or";
+  | "or"
+  | "in"
+  | "not in"
+  | "is"
+  | "is not";
 
 export type PythonUnaryOperator = "-" | "not";
 
@@ -34,6 +38,15 @@ export type PythonExpression =
   | { readonly kind: "list"; readonly elements: readonly PythonExpression[] }
   | { readonly kind: "await"; readonly operand: PythonExpression }
   | {
+      readonly kind: "f-string";
+      readonly parts: readonly PythonFStringPart[];
+    }
+  | {
+      readonly kind: "dict";
+      readonly entries: readonly { readonly key: PythonExpression; readonly value: PythonExpression }[];
+    }
+  | { readonly kind: "tuple"; readonly elements: readonly PythonExpression[] }
+  | {
       readonly kind: "call-kwargs";
       readonly callee: PythonExpression;
       readonly args: readonly PythonExpression[];
@@ -43,7 +56,12 @@ export type PythonExpression =
 export type PythonTypeAnnotation =
   | { readonly kind: "name"; readonly name: string }
   | { readonly kind: "subscript"; readonly name: string; readonly arguments: readonly PythonTypeAnnotation[] }
+  | { readonly kind: "optional"; readonly inner: PythonTypeAnnotation }
   | { readonly kind: "none" };
+
+export type PythonFStringPart =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "field"; readonly expression: PythonExpression };
 
 export interface PythonParameter {
   readonly name: string;
