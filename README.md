@@ -127,8 +127,9 @@ artifacts. That includes sparse arrays, JS array semantics on non-primitive
 elements (`at`, `includes`/`indexOf` over object elements, `.length =`),
 template literals with unproven substitutions, class
 inheritance/generics/accessors, string enums, enum ordering comparisons,
-and the `compat` typescript-compatibility mode (which requires the
-`python-js` runtime package and is rejected at option validation).
+and, in strict-native mode, every JS
+compatibility lane (compat output is selected explicitly through
+`typescriptCompatibility: "compat"` or the `js` surface).
 
 ## Lane ledger
 
@@ -149,6 +150,12 @@ Complete (fact-backed, runtime-proven):
 - Packaging: wheel-ready layout, py.typed, deterministic ordering,
   interpreter gates (3.12/3.13/3.14; absent interpreters are explicit
   environment skips)
+- JS compatibility subset through the tsonic-python-js runtime, selected by
+  compat mode or the js surface: undefined and strict equality, sparse
+  arrays and JsArray methods, UTF-16 string helpers, Number/Math helpers,
+  JSON parse/stringify over JsValue carriers, keyed dynamic reads, Map/Set,
+  Date UTC subset, typed arrays with ArrayBuffer/DataView; strict-native
+  output never references the runtime
 
 Hard-reject (fail closed by design, no external dependency):
 
@@ -162,11 +169,15 @@ Hard-reject (fail closed by design, no external dependency):
 - continue inside desugared C-style for; unawaited async calls; tuple
   access with non-literal indexes; source names in the generated-helper
   namespace
+- JS compat members without closed runtime rows: RegExp (the runtime
+  hard-rejects it), WeakMap/WeakSet, timers, console, fetch, DOM/Web and
+  Node APIs, proxies, symbols, custom toJSON and replacer/reviver,
+  JsArray index writes, dynamic property-name access and writes,
+  Date.now/Date.parse, TypedArray.set, string members the runtime does not
+  export (codePointAt, toUpperCase/toLowerCase, at, replace, concat)
 
 Blocked by external contract:
 
-- JS compatibility semantics (undefined, sparse arrays, JS equality,
-  dynamic carriers, compat mode): blocked on the python-js runtime package
 - Variadic stdlib APIs (os.path.join and similar): blocked on TSTS
   variadic parameter carriers
 - Promise/awaitable provider declarations: blocked on a promise kind in

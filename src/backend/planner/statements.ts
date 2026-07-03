@@ -47,11 +47,19 @@ import {
   TryStatement_TryBlock,
   hasSpreadToken,
 } from "../../common/source-ast.js";
+import type { PythonTargetOperationFact } from "../../source/python-facts/keys.js";
 import { isPythonBoolCarrier, isPythonListCarrier } from "../../source/python-target-types.js";
 import { isValidPythonIdentifier } from "../../common/python-names.js";
 import type { PythonExceptHandler, PythonExpression, PythonStatement, PythonTypeAnnotation } from "../python-ast/nodes.js";
 import { missingFactDiagnostic, unsupportedConstructDiagnostic } from "./diagnostics.js";
-import { expressionCarrier, planArguments, planExpression, planOperatorTokenLowering, pythonOperationFact } from "./expressions.js";
+import {
+  expressionCarrier,
+  importBindingExpression,
+  planArguments,
+  planExpression,
+  planOperatorTokenLowering,
+  pythonOperationFact,
+} from "./expressions.js";
 import { diagnosticInput, pythonLocalName } from "./plan-context.js";
 import type { PythonPlanContext } from "./plan-context.js";
 import { pythonTypeFromCarrierInContext } from "./render-types.js";
@@ -386,14 +394,28 @@ function planAssignmentStatement(expression: Node, context: PythonPlanContext): 
 }
 
 // Assignment to a property access target: proven project-source fields lower
-// to attribute assignment; anything else has no owning lane.
+// to attribute assignment; capability rows lower through their recorded
+// target form; anything else has no owning lane.
 function planAttributeWriteStatement(
   expression: Node,
   left: Node,
   right: Node,
   context: PythonPlanContext,
 ): readonly PythonStatement[] | undefined {
-  const fact = pythonOperationFact(left, context);
+  // Property writes through capability rows: the fact is checked on the
+  // assignment expression first, then on the property-access target
+  // (mirroring the element-write fact-subject pattern).
+  const expressionFact = pythonOperationFact(expression, context);
+  const leftFact = pythonOperationFact(left, context);
+  const capabilityFact = expressionFact !== undefined && expressionFact.kind === "capability-operation"
+    ? expressionFact
+    : leftFact !== undefined && leftFact.kind === "capability-operation"
+      ? leftFact
+      : undefined;
+  if (capabilityFact !== undefined) {
+    return planCapabilityAttributeWrite(expression, left, right, capabilityFact, context);
+  }
+  const fact = leftFact;
   if (fact === undefined || fact.kind !== "source-field" || !isValidPythonIdentifier(fact.name)) {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, expression),
@@ -409,6 +431,51 @@ function planAttributeWriteStatement(
     return undefined;
   }
   return [{ kind: "attribute-assign", target: receiver, name: fact.name, value }];
+}
+
+// Property writes through capability rows lower as method-kind operations
+// with the assigned value as the trailing argument. The fact's target form
+// decides the shape: a receiver-argument call-form target lowers to
+// fn(receiver, value) from its import binding; a method-form target lowers to
+// receiver.name(value). A call-form row without the receiver-argument marker
+// would silently drop the receiver, so it fails closed like every other form.
+function planCapabilityAttributeWrite(
+  expression: Node,
+  left: Node,
+  right: Node,
+  fact: Extract<PythonTargetOperationFact, { kind: "capability-operation" }>,
+  context: PythonPlanContext,
+): readonly PythonStatement[] | undefined {
+  const receiverNode = Node_Expression(left);
+  const target = fact.target;
+  const supportedForm = target.form === "method" || (target.form === "call" && target.receiverArgument === true);
+  if (fact.operationKind !== "method" || receiverNode === undefined || !supportedForm) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, expression),
+      "python.capability.property-write",
+      "Provider property writes require a method-kind fact with a receiver-argument call-form or method-form target.",
+    ));
+    return undefined;
+  }
+  const receiver = planExpression(receiverNode, context);
+  const value = planExpression(right, context);
+  if (receiver === undefined || value === undefined) {
+    return undefined;
+  }
+  if (target.form === "call") {
+    return [{
+      kind: "expr",
+      expression: { kind: "call", callee: importBindingExpression(context, target.import), args: [receiver, value] },
+    }];
+  }
+  if (target.form === "method") {
+    return [{
+      kind: "expr",
+      expression: { kind: "call", callee: { kind: "attribute", value: receiver, name: target.name }, args: [value] },
+    }];
+  }
+  // Unreachable: the supported-form gate above admits only the two forms.
+  return undefined;
 }
 
 function planExpressionStatement(node: Node, context: PythonPlanContext): readonly PythonStatement[] | undefined {

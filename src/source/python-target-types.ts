@@ -210,3 +210,38 @@ export function pythonJsDateTargetType(): TargetTypeRef {
 export function pythonJsObjectTargetType(): TargetTypeRef {
   return { kind: "target-named", id: pythonJsObjectTargetId };
 }
+
+// Typed-array lane carriers: one shared carrier covers every concrete typed
+// array class (their member surface is uniform); the concrete class name
+// lives only in constructor rows.
+export const pythonJsTypedArrayTargetId = "python.js.TypedArray";
+export const pythonJsArrayBufferTargetId = "python.js.ArrayBuffer";
+export const pythonJsDataViewTargetId = "python.js.DataView";
+
+export function pythonJsTypedArrayTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsTypedArrayTargetId };
+}
+
+export function pythonJsArrayBufferTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsArrayBufferTargetId };
+}
+
+export function pythonJsDataViewTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsDataViewTargetId };
+}
+
+const pythonJsCompatTargetIds: ReadonlySet<string> = new Set([
+  pythonJsValueTargetId,
+  pythonJsArrayTargetId,
+  pythonJsMapTargetId,
+  pythonJsSetTargetId,
+  pythonJsDateTargetId,
+  pythonJsObjectTargetId,
+  pythonJsTypedArrayTargetId,
+  pythonJsArrayBufferTargetId,
+  pythonJsDataViewTargetId,
+]);
+
+export function isPythonJsCompatCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && pythonJsCompatTargetIds.has(carrier.id);
+}

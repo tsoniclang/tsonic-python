@@ -13,6 +13,8 @@ import { createPythonTargetCapability } from "../../dist/source/capabilities/ind
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 export const repositoryRoot = resolve(testDirectory, "../..");
 export const fixturePackagesRoot = resolve(repositoryRoot, "test/fixtures/pypackages");
+// Sibling python-js checkout: runtime proofs import tsonic_python_js from it.
+export const pythonJsRuntimeRoot = resolve(repositoryRoot, "../python-js/src");
 
 export const strCarrier = { kind: "target-named", id: "python.str" };
 export const noneCarrier = { kind: "tuple", elements: [] };

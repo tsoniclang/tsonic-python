@@ -94,11 +94,15 @@ import {
   isPythonDictCarrier,
   isPythonExceptionCarrier,
   isPythonIntegerCarrier,
+  isPythonJsArrayCarrier,
+  isPythonJsCompatCarrier,
   isPythonJsonSerializableCarrier,
   isPythonNumericCarrier,
   isPythonOptionalCarrier,
   isPythonStrCarrier,
   isPythonTupleCarrier,
+  pythonJsArrayTargetType,
+  pythonJsValueTargetType,
   pythonDictTargetType,
   pythonDictValueCarrier,
   pythonExceptionTargetType,
@@ -128,7 +132,17 @@ import {
   selectPythonBinaryOperator,
   selectPythonCompoundAssignment,
 } from "./operator-rules.js";
-import { validatePythonTargetOptions } from "../../options/python-target-options.js";
+import {
+  pythonJsRuntimeModule,
+  pythonJsUndefinedForm,
+  selectJsSurfaceConstructor,
+  selectJsSurfaceOperation,
+} from "./js-surface-operations.js";
+import type { JsOperationSelection } from "./js-surface-operations.js";
+import {
+  readPythonTypescriptCompatibilityMode,
+  validatePythonTargetOptions,
+} from "../../options/python-target-options.js";
 
 export const pythonTargetSemanticsExtensionId = "tsonic.python.target-semantics";
 
@@ -138,6 +152,10 @@ export function createPythonTargetSemanticsExtension(context: TargetProviderCont
     ...createPythonStdlibCapabilities(),
     ...context.selectedCapabilities,
   ]);
+  // JS-surface lanes open only with the js surface or compat mode; strict
+  // native output stays entirely free of the compat runtime.
+  const jsEnabled = context.selectedSurfaces.some((surface) => surface.id === "js") ||
+    readPythonTypescriptCompatibilityMode(context.target) === "compat";
   return {
     identity: {
       id: pythonTargetSemanticsExtensionId,
@@ -153,7 +171,7 @@ export function createPythonTargetSemanticsExtension(context: TargetProviderCont
       extensionContext.registerLifecycleHook(
         ExtensionLifecycleEvent.beforeSemanticsFinalized,
         (_request, lifecycleContext) => {
-          recordPythonFactsBeforeFinalization(lifecycleContext, providerRows);
+          recordPythonFactsBeforeFinalization(lifecycleContext, providerRows, jsEnabled);
         },
       );
     },
@@ -168,6 +186,7 @@ interface PythonFactWalk {
   // registered declarations own source-type lanes; everything else fails
   // closed at every use site.
   readonly provenSourceTypes: Map<string, Node>;
+  readonly jsEnabled: boolean;
   currentThisCarrier?: TargetTypeRef;
 }
 
@@ -203,8 +222,9 @@ const KindSyntaxList = "KindSyntaxList";
 export function recordPythonFactsBeforeFinalization(
   lifecycle: ExtensionLifecycleContext,
   providerRows: readonly PythonCapabilityOperationRow[],
+  jsEnabled = false,
 ): void {
-  const walk: PythonFactWalk = { lifecycle, providerRows, resolving: new Set(), provenSourceTypes: new Map() };
+  const walk: PythonFactWalk = { lifecycle, providerRows, resolving: new Set(), provenSourceTypes: new Map(), jsEnabled };
   const { ast } = lifecycle.compiler;
   const projectStatements = (kindName: string): readonly { statement: Node; sourceFile: SourceFile }[] => {
     const results: { statement: Node; sourceFile: SourceFile }[] = [];
@@ -820,6 +840,12 @@ function resolveExpressionCarrierUncached(
 
 function resolveIdentifierCarrier(walk: PythonFactWalk, identifier: Node, sourceFile: SourceFile): TargetTypeRef | undefined {
   const { checker } = walk.lifecycle.compiler;
+  if (walk.jsEnabled && walk.lifecycle.compiler.ast.text(identifier) === "undefined") {
+    const type = checker.getTypeAtLocation(identifier);
+    if (type !== undefined && walk.lifecycle.compiler.typeShape.isVoidLike(type)) {
+      return recordJsUndefinedFacts(walk, identifier);
+    }
+  }
   const providerIdentity = providerDeclarationIdentityFor(walk, identifier);
   if (providerIdentity !== undefined) {
     // Static-attribute-style provider values referenced as bare identifiers.
@@ -960,6 +986,21 @@ function resolveBinaryCarrier(
   }
   const selection = selectPythonBinaryOperator(operatorKind, leftCarrier, rightCarrier);
   if (selection === undefined || leftCarrier === undefined) {
+    if (walk.jsEnabled && equalityOperator && leftCarrier !== undefined && rightCarrier !== undefined &&
+        (isPythonJsCompatCarrier(leftCarrier) || isPythonJsCompatCarrier(rightCarrier))) {
+      // JS strict equality between compat-carrying operands lowers through
+      // the runtime algorithm; the call receives both planned operands.
+      const operationId = "tsonic.python.js.strict-equal";
+      recordTargetOperation(walk, expression, operationId, "method", "strict_equal");
+      setPythonOperationFact(walk, expression, {
+        kind: "capability-operation",
+        operationId,
+        operationKind: "method",
+        target: { form: "call", import: { style: "from", module: pythonJsRuntimeModule, name: "strict_equal" } },
+        resultCarrier: boolCarrier,
+      });
+      return setCarrierFact(walk, expression, boolCarrier);
+    }
     return undefined;
   }
   if (selection.kind === "string-concat") {
@@ -1053,11 +1094,23 @@ function resolveCallLikeCarrier(
     return sourceCallLike;
   }
   if (expressionKind === KindNewExpression) {
+    if (walk.jsEnabled) {
+      const jsConstructor = selectJsConstructorForNode(walk, expression, callee, callArguments, sourceFile);
+      if (jsConstructor !== undefined) {
+        return applyJsSelection(walk, expression, jsConstructor, sourceFile, callArguments);
+      }
+    }
     return undefined;
   }
   const listMethod = tryListMethodCall(walk, expression, callee, callArguments, sourceFile);
   if (listMethod !== undefined) {
     return listMethod;
+  }
+  if (walk.jsEnabled) {
+    const jsCall = selectJsCallForNode(walk, callee, sourceFile);
+    if (jsCall !== undefined) {
+      return applyJsSelection(walk, expression, jsCall, sourceFile, callArguments);
+    }
   }
   const symbol = checker.getResolvedSymbolOrNil(callee) ?? checker.getSymbolAtLocation(callee);
   if (symbol === undefined) {
@@ -1216,7 +1269,25 @@ function resolvePropertyAccessCarrier(
     }
     return undefined;
   }
-  return trySourceMemberAccess(walk, expression);
+  const sourceMember = trySourceMemberAccess(walk, expression);
+  if (sourceMember !== undefined) {
+    return sourceMember;
+  }
+  if (walk.jsEnabled) {
+    const identity = libMemberIdentityFor(walk, expression);
+    if (identity !== undefined) {
+      const selection = selectJsSurfaceOperation({
+        ownerName: identity.ownerName,
+        memberName: identity.memberName,
+        operationKind: "property",
+        ...(receiverCarrier === undefined ? {} : { receiverCarrier }),
+      });
+      if (selection !== undefined) {
+        return applyJsSelection(walk, expression, selection, sourceFile, []);
+      }
+    }
+  }
+  return undefined;
 }
 
 function resolveElementAccessCarrier(
@@ -1292,6 +1363,20 @@ function resolveElementAccessCarrier(
       resultCarrier: dictValue,
     });
     return setCarrierFact(walk, expression, dictValue);
+  }
+  if (walk.jsEnabled && isPythonJsCompatCarrier(receiverCarrier)) {
+    // Keyed reads on compat carriers: positional slots on arrays and typed
+    // arrays, property keys on dynamic values.
+    const selection = selectJsSurfaceOperation({
+      ownerName: "Array",
+      memberName: "index",
+      operationKind: "indexer",
+      ...(receiverCarrier === undefined ? {} : { receiverCarrier }),
+    });
+    if (selection !== undefined) {
+      return applyJsSelection(walk, expression, selection, sourceFile, argument === undefined ? [] : [argument]);
+    }
+    return undefined;
   }
   if (receiverCarrier?.kind !== "target-named") {
     return undefined;
@@ -1405,8 +1490,11 @@ function resolveArrayLiteralCarrier(
   const { ast } = walk.lifecycle.compiler;
   const elements = ast.elements(expression).filter((element): element is Node => element !== undefined);
   if (elements.some((element) => ast.kindName(element) === KindOmittedExpression)) {
-    // Sparse literals have no static-native lane.
-    return undefined;
+    // Sparse literals have no static-native lane; the JS surface builds a
+    // JsArray with the holes lowered as undefined attributes.
+    return walk.jsEnabled
+      ? resolveSparseArrayLiteralCarrier(walk, expression, elements, sourceFile, expected)
+      : undefined;
   }
   if (expected !== undefined && isPythonTupleCarrier(expected)) {
     if (elements.length !== expected.elements.length) {
@@ -1460,6 +1548,60 @@ function resolveArrayLiteralCarrier(
     elementCarrier: expectedElement,
     resultCarrier,
     length: elements.length,
+  });
+  return setCarrierFact(walk, expression, resultCarrier);
+}
+
+// Sparse literals build a JsArray from every position in order: holes carry
+// their own undefined attribute facts, present elements must share one
+// proven carrier.
+function resolveSparseArrayLiteralCarrier(
+  walk: PythonFactWalk,
+  expression: Node,
+  elements: readonly Node[],
+  sourceFile: SourceFile,
+  expected: TargetTypeRef | undefined,
+): TargetTypeRef | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  const presentElements = elements.filter((element) => ast.kindName(element) !== KindOmittedExpression);
+  let elementCarrier = expected !== undefined && isPythonJsArrayCarrier(expected) && expected.kind === "target-named"
+    ? expected.typeArguments?.[0]
+    : undefined;
+  if (elementCarrier === undefined) {
+    for (const element of presentElements) {
+      const carrier = resolveExpressionCarrier(walk, element, sourceFile, undefined);
+      if (carrier !== undefined) {
+        elementCarrier = carrier;
+        break;
+      }
+    }
+  }
+  if (elementCarrier === undefined && presentElements.length > 0 &&
+      presentElements.every((element) => ast.kindName(element) === KindNumericLiteral)) {
+    elementCarrier = pythonSourcePrimitiveTargetType("float64");
+  }
+  if (elementCarrier === undefined) {
+    return undefined;
+  }
+  for (const element of elements) {
+    if (ast.kindName(element) === KindOmittedExpression) {
+      recordJsUndefinedFacts(walk, element);
+      continue;
+    }
+    const carrier = resolveExpressionCarrier(walk, element, sourceFile, elementCarrier);
+    if (carrier === undefined || !sameCarrier(carrier, elementCarrier)) {
+      return undefined;
+    }
+  }
+  const resultCarrier = pythonJsArrayTargetType(elementCarrier);
+  const operationId = "tsonic.python.js.Array.literal.sparse";
+  recordTargetOperation(walk, expression, operationId, "constructor", "JsArray");
+  setPythonOperationFact(walk, expression, {
+    kind: "capability-operation",
+    operationId,
+    operationKind: "constructor",
+    target: { form: "call", import: { style: "from", module: pythonJsRuntimeModule, name: "JsArray" } },
+    resultCarrier,
   });
   return setCarrierFact(walk, expression, resultCarrier);
 }
@@ -2258,6 +2400,138 @@ function tryAsyncProviderAwait(
     resultCarrier: row.resultCarrier,
   });
   return setCarrierFact(walk, expression, row.resultCarrier);
+}
+
+// --- JS surface lanes ---------------------------------------------------------
+
+interface PythonLibMemberIdentity {
+  readonly ownerName: string;
+  readonly memberName: string;
+}
+
+// Identity of a selected lib declaration member: the resolved symbol's
+// declaration must live in a non-capability .d.ts file; the owner is the
+// enclosing interface declaration. Names are read from the declaration
+// model, never from the user expression.
+function libMemberIdentityFor(walk: PythonFactWalk, reference: Node): PythonLibMemberIdentity | undefined {
+  const { ast, checker } = walk.lifecycle.compiler;
+  const facts = walk.lifecycle.host.facts;
+  const symbol = checker.getResolvedSymbolOrNil(reference) ?? checker.getSymbolAtLocation(reference);
+  if (symbol === undefined) {
+    return undefined;
+  }
+  for (const declaration of checker.getSymbolDeclarations(symbol)) {
+    if (declaration === undefined) {
+      continue;
+    }
+    const declarationFile = ast.getFileName(ast.getSourceFile(declaration));
+    if (!declarationFile.endsWith(".d.ts") || facts.get(declaration, providerVirtualDeclarationFactKey) !== undefined) {
+      continue;
+    }
+    let owner: Node | undefined = ast.parent(declaration);
+    while (owner !== undefined && ast.kindName(owner) !== KindInterfaceDeclaration) {
+      owner = ast.parent(owner);
+    }
+    if (owner === undefined) {
+      continue;
+    }
+    const ownerName = ast.text(ast.name(owner) ?? owner);
+    const memberName = checker.getSymbolName(symbol);
+    if (ownerName.length > 0 && memberName.length > 0) {
+      return { ownerName, memberName };
+    }
+  }
+  return undefined;
+}
+
+function applyJsSelection(
+  walk: PythonFactWalk,
+  expression: Node,
+  selection: JsOperationSelection,
+  sourceFile: SourceFile,
+  argumentNodes: readonly (Node | undefined)[],
+): TargetTypeRef {
+  for (const [index, argument] of argumentNodes.entries()) {
+    if (argument !== undefined) {
+      resolveExpressionCarrier(walk, argument, sourceFile, selection.parameterCarriers?.[index]);
+    }
+  }
+  recordTargetOperation(
+    walk,
+    expression,
+    selection.fact.operationId,
+    selection.fact.operationKind,
+    providerOperationTargetText(selection.fact.target),
+  );
+  setPythonOperationFact(walk, expression, selection.fact);
+  return setCarrierFact(walk, expression, selection.resultCarrier);
+}
+
+function selectJsCallForNode(walk: PythonFactWalk, callee: Node, sourceFile: SourceFile): JsOperationSelection | undefined {
+  const { ast } = walk.lifecycle.compiler;
+  if (ast.kindName(callee) !== KindPropertyAccessExpression) {
+    return undefined;
+  }
+  const identity = libMemberIdentityFor(walk, callee);
+  if (identity === undefined) {
+    return undefined;
+  }
+  const receiverNode = Node_Expression(callee);
+  const receiverCarrier = receiverNode === undefined
+    ? undefined
+    : resolveExpressionCarrier(walk, receiverNode, sourceFile, undefined);
+  return selectJsSurfaceOperation({
+    ownerName: identity.ownerName,
+    memberName: identity.memberName,
+    operationKind: "call",
+    ...(receiverCarrier === undefined ? {} : { receiverCarrier }),
+  });
+}
+
+function selectJsConstructorForNode(
+  walk: PythonFactWalk,
+  expression: Node,
+  callee: Node,
+  callArguments: readonly (Node | undefined)[],
+  sourceFile: SourceFile,
+): JsOperationSelection | undefined {
+  const { ast, checker } = walk.lifecycle.compiler;
+  const facts = walk.lifecycle.host.facts;
+  const symbol = checker.getResolvedSymbolOrNil(callee) ?? checker.getSymbolAtLocation(callee);
+  if (symbol === undefined) {
+    return undefined;
+  }
+  const isLibDeclaration = checker.getSymbolDeclarations(symbol).some((declaration) =>
+    declaration !== undefined &&
+    ast.getFileName(ast.getSourceFile(declaration)).endsWith(".d.ts") &&
+    facts.get(declaration, providerVirtualDeclarationFactKey) === undefined);
+  if (!isLibDeclaration) {
+    return undefined;
+  }
+  const typeArgumentCarriers = ast.typeArguments(expression).map((typeNode) =>
+    typeNode === undefined ? undefined : resolveTypeNodeCarrier(walk, typeNode));
+  const argumentCarriers = callArguments.map((argument) =>
+    argument === undefined ? undefined : resolveExpressionCarrier(walk, argument, sourceFile, undefined));
+  return selectJsSurfaceConstructor({
+    className: checker.getSymbolName(symbol),
+    typeArgumentCarriers,
+    argumentCarriers,
+  });
+}
+
+// The undefined singleton lowers as a module attribute of the compat
+// runtime; holes in sparse literals share the same fact shape.
+function recordJsUndefinedFacts(walk: PythonFactWalk, subject: Node): TargetTypeRef {
+  const operationId = "tsonic.python.js.undefined";
+  recordTargetOperation(walk, subject, operationId, "property", "undefined");
+  setPythonOperationFact(walk, subject, {
+    kind: "capability-operation",
+    operationId,
+    operationKind: "property",
+    target: pythonJsUndefinedForm,
+    resultCarrier: pythonJsValueTargetType(),
+  });
+  return setCarrierFact(walk, subject, pythonJsValueTargetType());
 }
 
 function safeAliasedSymbol(

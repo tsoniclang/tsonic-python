@@ -11,7 +11,14 @@ export type PythonImportBinding =
 
 // Python rendering form for a mapped operation.
 export type PythonCapabilityOperationForm =
-  | { readonly form: "call"; readonly import: PythonImportBinding }
+  | {
+      readonly form: "call";
+      readonly import: PythonImportBinding;
+      // The planned receiver expression is passed as the first call argument
+      // ahead of the source arguments (JS-surface free helpers over native
+      // receivers, e.g. char_code_at(value, index)).
+      readonly receiverArgument?: true;
+    }
   | { readonly form: "constructor"; readonly import: PythonImportBinding }
   | { readonly form: "method"; readonly name: string }
   | { readonly form: "property"; readonly name: string }
