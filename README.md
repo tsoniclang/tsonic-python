@@ -49,7 +49,7 @@ identifiers (no silent PEP 8 renaming of public APIs); reserved names on
 locals mangle deterministically with a trailing underscore; reserved public
 names and post-mangling collisions fail closed.
 
-Provider packages: `createPythonProviderPackage` supplies virtual module
+Target capabilities: `createPythonTargetCapability` supplies virtual module
 declarations, selected identity mapping, Python operation rows
 (call/constructor/property/method/static-attribute/indexer with from-import
 or module-attribute rendering), and pyproject dependency rows. Package
@@ -86,12 +86,14 @@ lower only as await operands).
 ## Installed plugin architecture
 
 `@tsonic/target-python` is an installed target plugin: `createTsonicPlugin()`
-returns the `TsonicTargetPlugin` contract, validated against the `tsonic`
-manifest in `package.json`. Third-party Python libraries are installed
-target-capability plugins built with `createPythonTargetCapability`:
-capability metadata validates at creation (identity-proven rows, Python
-names, receiver types), manifests validate against the shipped capability,
-and activation is import-driven. Operation rows are a Python-owned contract
+returns the `TsonicTargetPlugin` contract carrying the target identity; the
+`tsonic` manifest in `package.json` is the generic host discovery shape
+(kind `plugin`, contract version, entry) and only locates this entry point.
+Third-party Python libraries are installed target-capability plugins built
+with `createPythonTargetCapability`: capability identity and module
+ownership live on the plugin object, capability metadata validates at
+creation (identity-proven rows, Python names, receiver types), and
+activation is import-driven. Operation rows are a Python-owned contract
 interpreted only by this target — the generic capability operation mapper is
 not the operation interface.
 
@@ -118,11 +120,12 @@ logic lives in this repository.
 
 Source constructs without a finalized lowering lane fail closed with
 `PYTHON_UNSUPPORTED_AST`/`PYTHON_MISSING_TARGET_FACT` diagnostics and zero
-artifacts. That includes sparse arrays, JS array semantics (`at`, `includes`,
-`.length =`), template literals, class inheritance/generics/accessors,
-string enums, enum ordering comparisons, and the `compat`
-typescript-compatibility mode (which requires the `python-js` runtime
-package and is rejected at option validation).
+artifacts. That includes sparse arrays, JS array semantics on non-primitive
+elements (`at`, `includes`/`indexOf` over object elements, `.length =`),
+template literals with unproven substitutions, class
+inheritance/generics/accessors, string enums, enum ordering comparisons,
+and the `compat` typescript-compatibility mode (which requires the
+`python-js` runtime package and is rejected at option validation).
 
 ## Build and test
 
@@ -142,7 +145,7 @@ The build requires the sibling `tsonic` repository checked out at
   "id": "python",
   "options": {
     "packageName": "tsonic_generated",      // ^[a-z][a-z0-9_]*$
-    "pythonVersion": "3.12",                 // "3.12" | "3.13"
+    "pythonVersion": "3.12",                 // "3.12" | "3.13" | "3.14"
     "outputType": "package",                 // "package" | "script"
     "typescriptCompatibility": "strict-native" // "strict-native" | "compat"
   }
