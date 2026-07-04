@@ -157,10 +157,16 @@ export const pythonTargetSemanticsExtensionId = "tsonic.python.target-semantics"
 
 export function createPythonTargetSemanticsExtension(context: TargetProviderContext): CompilerExtension {
   validatePythonTargetOptions(context.target);
-  const providerRows = collectPythonCapabilityOperationRows([
-    ...createPythonStdlibCapabilities(),
-    ...context.selectedCapabilities,
-  ]);
+  const providerRows = collectPythonCapabilityOperationRows(
+    [...createPythonStdlibCapabilities(), ...context.selectedCapabilities],
+    {
+      project: context.project,
+      target: context.target,
+      targetPack: context.targetPack,
+      selectedCapabilities: context.selectedCapabilities,
+      selectedSurfaces: context.selectedSurfaces,
+    },
+  );
   // JS-surface lanes open only with the js surface or compat mode; strict
   // native output stays entirely free of the compat runtime.
   const jsEnabled = context.selectedSurfaces.some((surface) => surface.id === "js") ||

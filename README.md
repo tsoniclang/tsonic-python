@@ -93,9 +93,10 @@ Third-party Python libraries are installed target-capability plugins built
 with `createPythonTargetCapability`: capability identity and module
 ownership live on the plugin object, capability metadata validates at
 creation (identity-proven rows, Python names, receiver types), and
-activation is import-driven. Operation rows are a Python-owned contract
-interpreted only by this target — the generic capability operation mapper is
-not the operation interface.
+activation is import-driven. Operation rows ride the standard
+`createOperationMappers()` capability hook as a Python-owned mapper subtype
+(`kind: "python-operation-rows"`); only the Python target interprets the
+rows.
 
 Stdlib capabilities are target-owned (`python-math`, `python-pathlib`,
 `python-os`, `python-sys`, `python-datetime`, `python-asyncio`,
