@@ -130,9 +130,9 @@ export function sparse(): number {
 
 test("hard-rejected JS lanes fail closed under compat with zero artifacts", () => {
   const cases = [
-    ["regexp literal", `
-export function find(text: string): boolean {
-  return /abc/.test(text);
+    ["symbols", `
+export function tag(): void {
+  const marker = Symbol("tag");
 }
 `],
     ["WeakMap", `
@@ -156,4 +156,44 @@ export function later(): void {
     assert.equal(result.artifacts.length, 0, `${label} must produce zero artifacts`);
     assert.ok(result.diagnostics.length > 0, `${label} must diagnose`);
   }
+});
+
+test("regexp literals lower to the runtime subset engine under compat", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+export function find(text: string): boolean {
+  return /ab+c/i.test(text);
+}
+
+export function tidy(text: string): string {
+  return text.replace(/\\s/g, "-");
+}
+`,
+    },
+    target: compatTarget,
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const text = artifactText(result, "src/tsonic_generated/index.py");
+  assert.match(text, /from tsonic_python_js import JsRegExp/u);
+  assert.match(text, /JsRegExp\("ab\+c", "i"\)\.test\(text\)/u);
+  assert.match(text, /JsRegExp\("\\\\s", "g"\)\.replace\(text, "-"\)/u);
+});
+
+test("dynamic RegExp construction fails closed", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+export function build(pattern: string): boolean {
+  const re = new RegExp(pattern);
+  return re.test("x");
+}
+`,
+    },
+    target: compatTarget,
+  });
+
+  assert.equal(result.artifacts.length, 0);
+  assert.ok(result.diagnostics.length > 0);
 });

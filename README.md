@@ -152,10 +152,15 @@ Complete (fact-backed, runtime-proven):
   environment skips)
 - JS compatibility subset through the tsonic-python-js runtime, selected by
   compat mode or the js surface: undefined and strict equality, sparse
-  arrays and JsArray methods, UTF-16 string helpers, Number/Math helpers,
-  JSON parse/stringify over JsValue carriers, keyed dynamic reads, Map/Set,
-  Date UTC subset, typed arrays with ArrayBuffer/DataView; strict-native
-  output never references the runtime
+  arrays with JsArray methods and index writes, UTF-16 string helpers with
+  at/codePointAt/concat/string replace/case conversion, Number/Math
+  helpers, JSON parse/stringify over JsValue carriers, dynamic
+  read/write/delete lanes, Map/Set, Date with now/parse statics, typed
+  arrays with bulk set and ArrayBuffer/DataView, and the oracle-proven
+  RegExp subset (literal and literal-argument construction; test, replace,
+  split, search; selection by first-argument carrier). The runtime parity
+  inventory lives in the python-js repository (docs/js-parity.md);
+  strict-native output never references the runtime
 
 Hard-reject (fail closed by design, no external dependency):
 
@@ -169,12 +174,11 @@ Hard-reject (fail closed by design, no external dependency):
 - continue inside desugared C-style for; unawaited async calls; tuple
   access with non-literal indexes; source names in the generated-helper
   namespace
-- JS compat members without closed runtime rows: RegExp (the runtime
-  hard-rejects it), WeakMap/WeakSet, timers, console, fetch, DOM/Web and
-  Node APIs, proxies, symbols, custom toJSON and replacer/reviver,
-  JsArray index writes, dynamic property-name access and writes,
-  Date.now/Date.parse, TypedArray.set, string members the runtime does not
-  export (codePointAt, toUpperCase/toLowerCase, at, replace, concat)
+- JS compat members without closed runtime rows: WeakMap/WeakSet, timers,
+  console, fetch, DOM/Web and Node APIs, proxies, symbols, custom toJSON
+  and replacer/reviver, RegExp.exec and dynamic RegExp construction
+  (out-of-subset patterns raise at runtime construction — the runtime
+  engine is the subset authority), and locale surfaces
 
 Blocked by external contract:
 

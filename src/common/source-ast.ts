@@ -11,6 +11,7 @@ export const KindNoSubstitutionTemplateLiteral = "KindNoSubstitutionTemplateLite
 export const KindTemplateExpression = "KindTemplateExpression";
 export const KindTemplateSpan = "KindTemplateSpan";
 export const KindRegularExpressionLiteral = "KindRegularExpressionLiteral";
+export const KindDeleteExpression = "KindDeleteExpression";
 export const KindBooleanKeyword = "KindBooleanKeyword";
 export const KindCallExpression = "KindCallExpression";
 export const KindElementAccessExpression = "KindElementAccessExpression";
@@ -234,6 +235,38 @@ export function VariableStatement_DeclarationList(node: Node | undefined): Node 
   return nodeField(node, "DeclarationList");
 }
 
+// Node positions are utf-8 byte offsets, but JS strings index by UTF-16 code
+// units; slicing requires conversion or every span after a multi-byte
+// character reads the wrong text.
+function stringIndexFromByteOffset(text: string, byteOffset: number): number | undefined {
+  if (!Number.isSafeInteger(byteOffset) || byteOffset < 0) {
+    return undefined;
+  }
+  let bytes = 0;
+  let index = 0;
+  while (index < text.length) {
+    if (bytes === byteOffset) {
+      return index;
+    }
+    if (bytes > byteOffset) {
+      return undefined;
+    }
+    const codePoint = text.codePointAt(index);
+    if (codePoint === undefined) {
+      return undefined;
+    }
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    index += codePoint > 0xffff ? 2 : 1;
+  }
+  return bytes === byteOffset ? index : undefined;
+}
+
+function sliceByteSpan(text: string, startByte: number, endByte: number): string {
+  const start = stringIndexFromByteOffset(text, startByte);
+  const end = stringIndexFromByteOffset(text, endByte);
+  return start === undefined || end === undefined || end < start ? "" : text.slice(start, end);
+}
+
 // Unary expressions expose the operator as a raw numeric Kind, which the
 // public AstReader cannot name. Follow the reference approach: read the
 // operator text from the source span between node and operand.
@@ -242,7 +275,7 @@ export function getPrefixUnaryOperatorText(ast: AstReader, node: Node): string |
   const sourceText = ast.getSourceText(ast.getSourceFile(node));
   const start = ast.pos(node);
   const end = operand === undefined ? ast.end(node) : ast.pos(operand);
-  const prefixText = start < 0 || end < start ? "" : sourceText.slice(start, end).trimStart();
+  const prefixText = start < 0 || end < start ? "" : sliceByteSpan(sourceText, start, end).trimStart();
   for (const operator of ["++", "--", "!", "-", "+"]) {
     if (prefixText.startsWith(operator)) {
       return operator;
@@ -256,7 +289,7 @@ export function getPostfixUnaryOperatorText(ast: AstReader, node: Node): string 
   const sourceText = ast.getSourceText(ast.getSourceFile(node));
   const start = operand === undefined ? ast.pos(node) : ast.end(operand);
   const end = ast.end(node);
-  const postfixText = start < 0 || end < start ? "" : sourceText.slice(start, end).trimEnd();
+  const postfixText = start < 0 || end < start ? "" : sliceByteSpan(sourceText, start, end).trimEnd();
   for (const operator of ["++", "--"]) {
     if (postfixText.startsWith(operator)) {
       return operator;

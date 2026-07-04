@@ -20,7 +20,16 @@ export type PythonCapabilityOperationForm =
       readonly receiverArgument?: true;
     }
   | { readonly form: "constructor"; readonly import: PythonImportBinding }
-  | { readonly form: "method"; readonly name: string }
+  | {
+      readonly form: "method";
+      readonly name: string;
+      // The runtime subject is the FIRST call argument, not the source
+      // receiver: `text.replace(re, r)` anchors the method on the planned
+      // first argument and passes the planned source receiver as the first
+      // runtime argument, followed by the remaining source arguments —
+      // `re.replace(text, r)`.
+      readonly argumentReceiver?: true;
+    }
   | { readonly form: "property"; readonly name: string }
   | { readonly form: "static-attribute"; readonly import: PythonImportBinding; readonly name: string }
   | {
@@ -58,6 +67,10 @@ export type PythonTargetOperationFact =
       readonly operationKind: "method" | "constructor" | "property" | "indexer";
       readonly target: PythonCapabilityOperationForm;
       readonly resultCarrier: TargetTypeRef;
+      // Fact-proven string literals appended as string-literal call
+      // arguments immediately after the planned receiver (dynamic property
+      // names: `v.name` lowers to get_property(v, "name")).
+      readonly literalArguments?: readonly string[];
     }
   | {
       readonly kind: "array-literal";

@@ -296,11 +296,12 @@ function planElementWriteStatement(
   const fact = pythonOperationFact(expression, context) ?? pythonOperationFact(left, context);
   const isIndexWrite = fact !== undefined &&
     ((fact.kind === "list-op" && fact.op === "index-write") || (fact.kind === "dict-op" && fact.op === "index-write"));
-  if (!isIndexWrite) {
+  const capabilityWrite = fact !== undefined && fact.kind === "capability-operation" ? fact : undefined;
+  if (!isIndexWrite && capabilityWrite === undefined) {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, expression),
       "python.backend.assignment",
-      "Element assignments require a finalized list or dict index-write fact.",
+      "Element assignments require a finalized index-write or capability write fact.",
     ));
     return undefined;
   }
@@ -310,6 +311,39 @@ function planElementWriteStatement(
   const index = indexNode === undefined ? undefined : planExpression(indexNode, context);
   const value = planExpression(right, context);
   if (target === undefined || index === undefined || value === undefined) {
+    return undefined;
+  }
+  if (capabilityWrite !== undefined) {
+    // Element writes through capability rows: method-form calls the write
+    // method on the receiver; receiver-argument call rows pass the receiver
+    // first, then fact-proven literals, then index and value.
+    const literalExpressions: readonly PythonExpression[] =
+      (capabilityWrite.literalArguments ?? []).map((literal) => ({ kind: "string-literal", value: literal }));
+    if (capabilityWrite.target.form === "method" && capabilityWrite.target.argumentReceiver !== true) {
+      return [{
+        kind: "expr",
+        expression: {
+          kind: "call",
+          callee: { kind: "attribute", value: target, name: capabilityWrite.target.name },
+          args: [index, value],
+        },
+      }];
+    }
+    if (capabilityWrite.target.form === "call" && capabilityWrite.target.receiverArgument === true) {
+      return [{
+        kind: "expr",
+        expression: {
+          kind: "call",
+          callee: importBindingExpression(context, capabilityWrite.target.import),
+          args: [target, ...literalExpressions, index, value],
+        },
+      }];
+    }
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, expression),
+      "python.capability.element-write",
+      "Element writes lower only through method or receiver-argument call rows.",
+    ));
     return undefined;
   }
   return [{ kind: "subscript-assign", target, index, value }];
@@ -495,7 +529,7 @@ function planExpressionStatement(node: Node, context: PythonPlanContext): readon
   if (expressionKind === KindPostfixUnaryExpression || expressionKind === KindPrefixUnaryExpression) {
     return planUpdateStatement(expression, context);
   }
-  if (expressionKind === KindCallExpression || expressionKind === "KindAwaitExpression") {
+  if (expressionKind === KindCallExpression || expressionKind === "KindAwaitExpression" || expressionKind === "KindDeleteExpression") {
     const planned = planExpression(expression, context);
     return planned === undefined ? undefined : [{ kind: "expr", expression: planned }];
   }

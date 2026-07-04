@@ -61,6 +61,7 @@ import {
   KindPostfixUnaryExpression,
   KindPrefixUnaryExpression,
   KindPropertyAccessExpression,
+  KindRegularExpressionLiteral,
   KindReturnStatement,
   KindStringKeyword,
   KindStringLiteral,
@@ -96,12 +97,15 @@ import {
   isPythonIntegerCarrier,
   isPythonJsArrayCarrier,
   isPythonJsCompatCarrier,
+  isPythonJsObjectCarrier,
+  isPythonJsValueCarrier,
   isPythonJsonSerializableCarrier,
   isPythonNumericCarrier,
   isPythonOptionalCarrier,
   isPythonStrCarrier,
   isPythonTupleCarrier,
   pythonJsArrayTargetType,
+  pythonJsRegExpTargetType,
   pythonJsValueTargetType,
   pythonDictTargetType,
   pythonDictValueCarrier,
@@ -133,7 +137,12 @@ import {
   selectPythonCompoundAssignment,
 } from "./operator-rules.js";
 import {
+  pythonJsArrayIndexWriteForm,
+  pythonJsDeletePropertyForm,
+  pythonJsGetPropertyForm,
+  pythonJsRegExpConstructorForm,
   pythonJsRuntimeModule,
+  pythonJsSetPropertyForm,
   pythonJsUndefinedForm,
   selectJsSurfaceConstructor,
   selectJsSurfaceOperation,
@@ -218,6 +227,7 @@ const KindUnionType = "KindUnionType";
 const KindLiteralType = "KindLiteralType";
 const KindTupleType = "KindTupleType";
 const KindSyntaxList = "KindSyntaxList";
+const KindDeleteExpression = "KindDeleteExpression";
 
 export function recordPythonFactsBeforeFinalization(
   lifecycle: ExtensionLifecycleContext,
@@ -573,7 +583,7 @@ function recordExpressionStatementFacts(walk: PythonFactWalk, expression: Node, 
         return;
       }
       if (leftKind === KindPropertyAccessExpression) {
-        recordThisFieldWriteFacts(walk, left, right, sourceFile);
+        recordPropertyWriteFacts(walk, expression, left, right, sourceFile);
         return;
       }
       const leftCarrier = resolveExpressionCarrier(walk, left, sourceFile, undefined);
@@ -593,20 +603,52 @@ function recordExpressionStatementFacts(walk: PythonFactWalk, expression: Node, 
   resolveExpressionCarrier(walk, expression, sourceFile, undefined);
 }
 
-// Field writes participate only on `this` receivers inside proven class
-// bodies; other property writes (including `.length =`) have no
-// static-native lane.
-function recordThisFieldWriteFacts(walk: PythonFactWalk, left: Node, right: Node, sourceFile: SourceFile): void {
+// Field writes participate on `this` receivers inside proven class bodies
+// (native lane) and on dynamic JS carriers with identifier member names
+// (compat lane); other property writes (including `.length =`) have no lane.
+function recordPropertyWriteFacts(
+  walk: PythonFactWalk,
+  assignment: Node,
+  left: Node,
+  right: Node,
+  sourceFile: SourceFile,
+): void {
   const { ast } = walk.lifecycle.compiler;
   const receiver = Node_Expression(left);
   const receiverKind = receiver === undefined ? "" : ast.kindName(receiver);
-  if ((receiverKind !== KindThisKeyword && receiverKind !== KindThisExpression) || walk.currentThisCarrier === undefined) {
+  if ((receiverKind === KindThisKeyword || receiverKind === KindThisExpression) && walk.currentThisCarrier !== undefined) {
+    const leftCarrier = resolveExpressionCarrier(walk, left, sourceFile, undefined);
+    if (leftCarrier !== undefined) {
+      resolveExpressionCarrier(walk, right, sourceFile, leftCarrier);
+    }
     return;
   }
-  const leftCarrier = resolveExpressionCarrier(walk, left, sourceFile, undefined);
-  if (leftCarrier !== undefined) {
-    resolveExpressionCarrier(walk, right, sourceFile, leftCarrier);
+  if (!walk.jsEnabled || receiver === undefined) {
+    return;
   }
+  const receiverCarrier = resolveExpressionCarrier(walk, receiver, sourceFile, undefined);
+  if (!isPythonJsDynamicCarrier(receiverCarrier)) {
+    return;
+  }
+  const nameNode = Node_Name(left);
+  const memberName = nameNode !== undefined && ast.kindName(nameNode) === KindIdentifier ? ast.text(nameNode) : "";
+  if (memberName.length === 0) {
+    return;
+  }
+  const valueCarrier = resolveExpressionCarrier(walk, right, sourceFile, undefined);
+  if (valueCarrier === undefined) {
+    return;
+  }
+  const operationId = `tsonic.python.js.dynamic.property-write:${memberName}`;
+  recordTargetOperation(walk, assignment, operationId, "method", "set_property");
+  setPythonOperationFact(walk, assignment, {
+    kind: "capability-operation",
+    operationId,
+    operationKind: "method",
+    target: pythonJsSetPropertyForm,
+    resultCarrier: pythonNoneTargetType(),
+    literalArguments: [memberName],
+  });
 }
 
 function resolveTypeNodeCarrier(walk: PythonFactWalk, typeNode: Node | undefined): TargetTypeRef | undefined {
@@ -785,6 +827,12 @@ function resolveExpressionCarrierUncached(
     case KindTemplateExpression:
     case KindNoSubstitutionTemplateLiteral: {
       return resolveTemplateCarrier(walk, expression, sourceFile, kind);
+    }
+    case KindRegularExpressionLiteral: {
+      return resolveRegExpLiteralCarrier(walk, expression);
+    }
+    case KindDeleteExpression: {
+      return resolveJsDeleteCarrier(walk, expression, sourceFile);
     }
     case KindTrueKeyword:
     case KindFalseKeyword: {
@@ -1107,7 +1155,7 @@ function resolveCallLikeCarrier(
     return listMethod;
   }
   if (walk.jsEnabled) {
-    const jsCall = selectJsCallForNode(walk, callee, sourceFile);
+    const jsCall = selectJsCallForNode(walk, callee, callArguments, sourceFile);
     if (jsCall !== undefined) {
       return applyJsSelection(walk, expression, jsCall, sourceFile, callArguments);
     }
@@ -1286,6 +1334,27 @@ function resolvePropertyAccessCarrier(
         return applyJsSelection(walk, expression, selection, sourceFile, []);
       }
     }
+    if (isPythonJsDynamicCarrier(receiverCarrier)) {
+      // Property names on dynamic carriers are fact-proven string literals
+      // passed to the property helpers.
+      const nameNode = Node_Name(expression);
+      const memberName = nameNode !== undefined && walk.lifecycle.compiler.ast.kindName(nameNode) === KindIdentifier
+        ? walk.lifecycle.compiler.ast.text(nameNode)
+        : "";
+      if (memberName.length > 0) {
+        const operationId = `tsonic.python.js.dynamic.property-read:${memberName}`;
+        recordTargetOperation(walk, expression, operationId, "property", "get_property");
+        setPythonOperationFact(walk, expression, {
+          kind: "capability-operation",
+          operationId,
+          operationKind: "property",
+          target: pythonJsGetPropertyForm,
+          resultCarrier: pythonJsValueTargetType(),
+          literalArguments: [memberName],
+        });
+        return setCarrierFact(walk, expression, pythonJsValueTargetType());
+      }
+    }
   }
   return undefined;
 }
@@ -1448,7 +1517,57 @@ function recordListIndexWriteFacts(
       op: "index-write",
       resultCarrier: pythonNoneTargetType(),
     });
+    return;
   }
+  if (!walk.jsEnabled) {
+    return;
+  }
+  if (isPythonJsArrayCarrier(receiverCarrier) && receiverCarrier?.kind === "target-named") {
+    // Sparse-growth index write: xs[i] = v lowers through JsArray.set.
+    const arrayElement = receiverCarrier.typeArguments?.[0];
+    const indexCarrier = index === undefined
+      ? undefined
+      : resolveExpressionCarrier(walk, index, sourceFile, listLengthCarrier);
+    if (arrayElement === undefined || !isPythonIntegerCarrier(indexCarrier)) {
+      return;
+    }
+    const valueCarrier = resolveExpressionCarrier(walk, right, sourceFile, arrayElement);
+    if (valueCarrier === undefined || !sameCarrier(valueCarrier, arrayElement)) {
+      return;
+    }
+    const operationId = "tsonic.python.js.Array.index-write";
+    recordTargetOperation(walk, assignment, operationId, "method", "set");
+    setPythonOperationFact(walk, assignment, {
+      kind: "capability-operation",
+      operationId,
+      operationKind: "method",
+      target: pythonJsArrayIndexWriteForm,
+      resultCarrier: pythonNoneTargetType(),
+    });
+    return;
+  }
+  if (isPythonJsDynamicCarrier(receiverCarrier)) {
+    const keyCarrier = index === undefined
+      ? undefined
+      : resolveExpressionCarrier(walk, index, sourceFile, undefined);
+    const valueCarrier = resolveExpressionCarrier(walk, right, sourceFile, undefined);
+    if (keyCarrier === undefined || valueCarrier === undefined) {
+      return;
+    }
+    const operationId = "tsonic.python.js.dynamic.index-write";
+    recordTargetOperation(walk, assignment, operationId, "method", "set_property");
+    setPythonOperationFact(walk, assignment, {
+      kind: "capability-operation",
+      operationId,
+      operationKind: "method",
+      target: pythonJsSetPropertyForm,
+      resultCarrier: pythonNoneTargetType(),
+    });
+  }
+}
+
+function isPythonJsDynamicCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return isPythonJsValueCarrier(carrier) || isPythonJsObjectCarrier(carrier);
 }
 
 function recordForOfFacts(
@@ -2467,7 +2586,12 @@ function applyJsSelection(
   return setCarrierFact(walk, expression, selection.resultCarrier);
 }
 
-function selectJsCallForNode(walk: PythonFactWalk, callee: Node, sourceFile: SourceFile): JsOperationSelection | undefined {
+function selectJsCallForNode(
+  walk: PythonFactWalk,
+  callee: Node,
+  callArguments: readonly (Node | undefined)[],
+  sourceFile: SourceFile,
+): JsOperationSelection | undefined {
   const { ast } = walk.lifecycle.compiler;
   if (ast.kindName(callee) !== KindPropertyAccessExpression) {
     return undefined;
@@ -2480,11 +2604,16 @@ function selectJsCallForNode(walk: PythonFactWalk, callee: Node, sourceFile: Sou
   const receiverCarrier = receiverNode === undefined
     ? undefined
     : resolveExpressionCarrier(walk, receiverNode, sourceFile, undefined);
+  // First-argument carriers disambiguate rows claimed by argument identity
+  // (string methods taking a JsRegExp).
+  const argumentCarriers = callArguments.map((argument) =>
+    argument === undefined ? undefined : resolveExpressionCarrier(walk, argument, sourceFile, undefined));
   return selectJsSurfaceOperation({
     ownerName: identity.ownerName,
     memberName: identity.memberName,
     operationKind: "call",
     ...(receiverCarrier === undefined ? {} : { receiverCarrier }),
+    argumentCarriers,
   });
 }
 
@@ -2512,11 +2641,70 @@ function selectJsConstructorForNode(
     typeNode === undefined ? undefined : resolveTypeNodeCarrier(walk, typeNode));
   const argumentCarriers = callArguments.map((argument) =>
     argument === undefined ? undefined : resolveExpressionCarrier(walk, argument, sourceFile, undefined));
+  // Rows gated on literal string arguments (RegExp patterns) prove against
+  // the argument node kinds, never against carrier text.
+  const stringLiteralArguments = callArguments.map((argument) =>
+    argument !== undefined && ast.kindName(argument) === KindStringLiteral);
   return selectJsSurfaceConstructor({
     className: checker.getSymbolName(symbol),
     typeArgumentCarriers,
     argumentCarriers,
+    stringLiteralArguments,
   });
+}
+
+// Regex literals lower to the runtime constructor; the planner reads the
+// pattern and flags from the literal text and the runtime constructor is
+// the subset authority (out-of-subset patterns raise at construction).
+function resolveRegExpLiteralCarrier(walk: PythonFactWalk, expression: Node): TargetTypeRef | undefined {
+  if (!walk.jsEnabled) {
+    return undefined;
+  }
+  const operationId = "tsonic.python.js.RegExp.literal";
+  recordTargetOperation(walk, expression, operationId, "constructor", "JsRegExp");
+  setPythonOperationFact(walk, expression, {
+    kind: "capability-operation",
+    operationId,
+    operationKind: "constructor",
+    target: pythonJsRegExpConstructorForm,
+    resultCarrier: pythonJsRegExpTargetType(),
+  });
+  return setCarrierFact(walk, expression, pythonJsRegExpTargetType());
+}
+
+// `delete v[k]` on dynamic carriers lowers through delete_property; every
+// other delete operand records nothing.
+function resolveJsDeleteCarrier(walk: PythonFactWalk, expression: Node, sourceFile: SourceFile): TargetTypeRef | undefined {
+  if (!walk.jsEnabled) {
+    return undefined;
+  }
+  const { ast } = walk.lifecycle.compiler;
+  const operand = unwrapParenthesized(ast, Node_Expression(expression));
+  if (operand === undefined || ast.kindName(operand) !== KindElementAccessExpression) {
+    return undefined;
+  }
+  const receiver = Node_Expression(operand);
+  const receiverCarrier = receiver === undefined
+    ? undefined
+    : resolveExpressionCarrier(walk, receiver, sourceFile, undefined);
+  if (!isPythonJsDynamicCarrier(receiverCarrier)) {
+    return undefined;
+  }
+  const key = ElementAccessExpression_ArgumentExpression(operand);
+  const keyCarrier = key === undefined ? undefined : resolveExpressionCarrier(walk, key, sourceFile, undefined);
+  if (keyCarrier === undefined) {
+    return undefined;
+  }
+  const operationId = "tsonic.python.js.dynamic.delete";
+  recordTargetOperation(walk, expression, operationId, "method", "delete_property");
+  setPythonOperationFact(walk, expression, {
+    kind: "capability-operation",
+    operationId,
+    operationKind: "method",
+    target: pythonJsDeletePropertyForm,
+    resultCarrier: boolCarrier,
+  });
+  return setCarrierFact(walk, expression, boolCarrier);
 }
 
 // The undefined singleton lowers as a module attribute of the compat

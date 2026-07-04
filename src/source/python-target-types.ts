@@ -212,6 +212,10 @@ export function pythonJsObjectTargetType(): TargetTypeRef {
   return { kind: "target-named", id: pythonJsObjectTargetId };
 }
 
+export function isPythonJsObjectCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && carrier.id === pythonJsObjectTargetId;
+}
+
 // Typed-array lane carriers: one shared carrier covers every concrete typed
 // array class (their member surface is uniform); the concrete class name
 // lives only in constructor rows.

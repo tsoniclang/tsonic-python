@@ -17,6 +17,7 @@ import {
   KindParenthesizedExpression,
   KindPostfixUnaryExpression,
   KindPrefixUnaryExpression,
+  KindDeleteExpression,
   KindRegularExpressionLiteral,
   KindPropertyAccessExpression,
   KindStringLiteral,
@@ -168,6 +169,9 @@ export function planExpression(node: Node, context: PythonPlanContext): PythonEx
     }
     case KindRegularExpressionLiteral: {
       return planRegularExpressionLiteral(node, context);
+    }
+    case KindDeleteExpression: {
+      return planDeleteExpression(node, context);
     }
     case "KindObjectLiteralExpression": {
       return planRecordLiteral(node, context);
@@ -569,7 +573,12 @@ function planProviderOperationExpression(
   form: PythonCapabilityOperationForm,
   receiverNode: Node | undefined,
   args: readonly PythonExpression[],
+  literalArguments: readonly string[] = [],
 ): PythonExpression | undefined {
+  // Fact-proven string literals (dynamic property names) insert immediately
+  // after the planned receiver.
+  const literalExpressions: readonly PythonExpression[] =
+    literalArguments.map((value) => ({ kind: "string-literal", value }));
   switch (form.form) {
     case "call": {
       // Rows marked receiverArgument pass the planned receiver as the first
@@ -581,14 +590,35 @@ function planProviderOperationExpression(
         if (receiver === undefined) {
           return undefined;
         }
-        return { kind: "call", callee: importBindingExpression(context, form.import), args: [receiver, ...args] };
+        return {
+          kind: "call",
+          callee: importBindingExpression(context, form.import),
+          args: [receiver, ...literalExpressions, ...args],
+        };
       }
-      return { kind: "call", callee: importBindingExpression(context, form.import), args };
+      return literalExpressions.length === 0
+        ? { kind: "call", callee: importBindingExpression(context, form.import), args }
+        : undefined;
     }
     case "constructor": {
       return { kind: "call", callee: importBindingExpression(context, form.import), args };
     }
     case "method": {
+      // Rows marked argumentReceiver anchor the runtime subject on the first
+      // planned source argument and pass the planned source receiver as the
+      // first runtime argument: text.replace(re, r) lowers re.replace(text, r).
+      if (form.argumentReceiver === true) {
+        const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
+        const anchor = args[0];
+        if (receiver === undefined || anchor === undefined) {
+          return undefined;
+        }
+        return {
+          kind: "call",
+          callee: { kind: "attribute", value: anchor, name: form.name },
+          args: [receiver, ...args.slice(1)],
+        };
+      }
       const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
       if (receiver === undefined) {
         return undefined;
@@ -695,7 +725,7 @@ function planCallExpression(node: Node, context: PythonPlanContext): PythonExpre
     return undefined;
   }
   if (fact !== undefined && fact.kind === "capability-operation") {
-    const planned = planProviderOperationExpression(context, fact.target, receiverNode, args);
+    const planned = planProviderOperationExpression(context, fact.target, receiverNode, args, fact.literalArguments ?? []);
     if (planned === undefined) {
       context.diagnostics.push(unsupportedConstructDiagnostic(
         diagnosticInput(context, node),
@@ -862,7 +892,7 @@ function planPropertyAccess(node: Node, context: PythonPlanContext): PythonExpre
     ));
     return undefined;
   }
-  const planned = planProviderOperationExpression(context, fact.target, Node_Expression(node), []);
+  const planned = planProviderOperationExpression(context, fact.target, Node_Expression(node), [], fact.literalArguments ?? []);
   if (planned === undefined) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
@@ -911,7 +941,7 @@ function planElementAccess(node: Node, context: PythonPlanContext): PythonExpres
     ));
     return undefined;
   }
-  const planned = planProviderOperationExpression(context, fact.target, Node_Expression(node), [index]);
+  const planned = planProviderOperationExpression(context, fact.target, Node_Expression(node), [index], fact.literalArguments ?? []);
   if (planned === undefined) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
@@ -963,6 +993,36 @@ function isImportBindingValue(value: unknown): value is PythonImportBinding {
     return typeof binding.module === "string" && (binding.name === undefined || typeof binding.name === "string");
   }
   return false;
+}
+
+// Delete expressions lower through the capability fact recorded on the
+// delete node: a receiver-argument call receiving the planned target and the
+// planned (or fact-proven literal) key.
+function planDeleteExpression(node: Node, context: PythonPlanContext): PythonExpression | undefined {
+  const fact = pythonOperationFact(node, context);
+  if (fact === undefined || fact.kind !== "capability-operation") {
+    context.diagnostics.push(missingFactDiagnostic(
+      diagnosticInput(context, node),
+      "python.capability.delete",
+      "Delete expressions require a finalized runtime delete fact.",
+    ));
+    return undefined;
+  }
+  const operand = unwrapParenthesized(context.input.ast, Node_Expression(node));
+  if (operand === undefined || context.input.ast.kindName(operand) !== KindElementAccessExpression) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.capability.delete",
+      "Delete lowers only over element accesses on runtime carriers.",
+    ));
+    return undefined;
+  }
+  const keyNode = ElementAccessExpression_ArgumentExpression(operand);
+  const key = keyNode === undefined ? undefined : planExpression(keyNode, context);
+  if (key === undefined) {
+    return undefined;
+  }
+  return planProviderOperationExpression(context, fact.target, Node_Expression(operand), [key], fact.literalArguments ?? []);
 }
 
 // Regex literals lower through a finalized constructor row; the pattern and

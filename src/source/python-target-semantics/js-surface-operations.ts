@@ -12,6 +12,8 @@ import {
   pythonJsMapTargetId,
   pythonJsMapTargetType,
   pythonJsObjectTargetId,
+  pythonJsRegExpTargetId,
+  pythonJsRegExpTargetType,
   pythonJsSetTargetId,
   pythonJsSetTargetType,
   pythonJsTypedArrayTargetId,
@@ -37,6 +39,7 @@ export interface JsOperationRequest {
   readonly memberName: string;
   readonly operationKind: "call" | "property" | "indexer";
   readonly receiverCarrier?: TargetTypeRef;
+  readonly argumentCarriers?: readonly (TargetTypeRef | undefined)[];
 }
 
 export type JsCapabilityOperationFact = Extract<PythonTargetOperationFact, { kind: "capability-operation" }>;
@@ -53,7 +56,9 @@ type JsLane =
   | "map"
   | "set"
   | "date"
+  | "date-static"
   | "dynamic"
+  | "regexp"
   | "typed-array"
   | "array-buffer"
   | "data-view"
@@ -86,6 +91,10 @@ interface JsOperationRowData {
   readonly target: PythonCapabilityOperationForm;
   readonly result: JsCarrierRef;
   readonly params?: readonly (JsCarrierRef | undefined)[];
+  // Rows claimed by a first-argument carrier identity (String.replace with a
+  // JsRegExp first argument); rows without the field never match when a
+  // competing row claims the call's first-argument identity.
+  readonly firstArgCarrierId?: string;
 }
 
 function fromJs(name: string): PythonImportBinding {
@@ -98,6 +107,33 @@ export const pythonJsUndefinedForm: PythonCapabilityOperationForm = {
   form: "static-attribute",
   import: { style: "module", module: pythonJsRuntimeModule },
   name: "undefined",
+};
+
+// Forms recorded by the write/delete/regex-literal hooks; the concrete
+// runtime spellings stay in this file.
+export const pythonJsRegExpConstructorForm: PythonCapabilityOperationForm = {
+  form: "constructor",
+  import: { style: "from", module: pythonJsRuntimeModule, name: "JsRegExp" },
+};
+
+export const pythonJsArrayIndexWriteForm: PythonCapabilityOperationForm = { form: "method", name: "set" };
+
+export const pythonJsGetPropertyForm: PythonCapabilityOperationForm = {
+  form: "call",
+  import: { style: "from", module: pythonJsRuntimeModule, name: "get_property" },
+  receiverArgument: true,
+};
+
+export const pythonJsSetPropertyForm: PythonCapabilityOperationForm = {
+  form: "call",
+  import: { style: "from", module: pythonJsRuntimeModule, name: "set_property" },
+  receiverArgument: true,
+};
+
+export const pythonJsDeletePropertyForm: PythonCapabilityOperationForm = {
+  form: "call",
+  import: { style: "from", module: pythonJsRuntimeModule, name: "delete_property" },
+  receiverArgument: true,
 };
 
 function receiverCall(name: string): PythonCapabilityOperationForm {
@@ -250,6 +286,22 @@ const jsOperationRows: readonly JsOperationRowData[] = [
   stringRow("padStart", "pad_start", str, [int32, str]),
   stringRow("padEnd", "pad_end", str, [int32, str]),
   { owner: "String", member: "split", operationKind: "call", lane: "string", factOperationKind: "method", target: receiverCall("split"), result: { ref: "str-list" }, params: [str, int32] },
+  // Maybe-undefined positional reads follow the dynamic-result convention.
+  stringRow("at", "at", jsvalue, [int32]),
+  stringRow("codePointAt", "code_point_at", jsvalue, [int32]),
+  stringRow("concat", "concat", str, [str, str, str, str]),
+  stringRow("replace", "replace", str, [str, str]),
+  stringRow("toUpperCase", "to_upper_case", str),
+  stringRow("toLowerCase", "to_lower_case", str),
+
+  // RegExp lane: the pattern subset authority is the runtime constructor.
+  memberRow("RegExp", "test", "regexp", method("test"), "method", bool, [str]),
+  // String methods with a JsRegExp first argument re-anchor on it: the
+  // runtime method's subject is the regexp, the text becomes the first
+  // runtime argument.
+  { owner: "String", member: "replace", operationKind: "call", lane: "string", factOperationKind: "method", target: { form: "method", name: "replace", argumentReceiver: true }, result: str, params: [undefined, str], firstArgCarrierId: pythonJsRegExpTargetId },
+  { owner: "String", member: "split", operationKind: "call", lane: "string", factOperationKind: "method", target: { form: "method", name: "split", argumentReceiver: true }, result: { ref: "str-list" }, params: [undefined], firstArgCarrierId: pythonJsRegExpTargetId },
+  { owner: "String", member: "search", operationKind: "call", lane: "string", factOperationKind: "method", target: { form: "method", name: "search", argumentReceiver: true }, result: int32, params: [undefined], firstArgCarrierId: pythonJsRegExpTargetId },
 
   // Static string factory lane.
   staticCallRow("StringConstructor", "fromCharCode", "string-static", "from_char_code", str, [int32, int32, int32, int32]),
@@ -299,6 +351,10 @@ const jsOperationRows: readonly JsOperationRowData[] = [
   memberRow("Set", "delete", "set", method("delete"), "method", bool, [{ ref: "set-value" }]),
   memberRow("Set", "clear", "set", method("clear"), "method", { ref: "none" }),
 
+  // Date statics: epoch-ms numbers.
+  staticCallRow("DateConstructor", "now", "date-static", "date_now", float64),
+  staticCallRow("DateConstructor", "parse", "date-static", "date_parse", float64, [str]),
+
   // Date lane: UTC epoch-ms subset.
   memberRow("Date", "getTime", "date", method("get_time"), "method", float64),
   memberRow("Date", "toISOString", "date", method("to_iso_string"), "method", str),
@@ -316,6 +372,8 @@ const jsOperationRows: readonly JsOperationRowData[] = [
     memberRow(owner, "byteOffset", "typed-array", property("byte_offset"), "property", int32),
     memberRow(owner, "slice", "typed-array", method("slice"), "method", receiver, [int32, int32]),
     memberRow(owner, "subarray", "typed-array", method("subarray"), "method", receiver, [int32, int32]),
+    // Bulk copy: set(source) and set(source, offset).
+    memberRow(owner, "set", "typed-array", method("set"), "method", { ref: "none" }, [undefined, int32]),
   ]),
   memberRow("Array", "index", "typed-array", method("get"), "indexer", float64, [int32]),
 
@@ -342,6 +400,7 @@ const staticOwnerLanes: Readonly<Record<string, JsLane>> = {
   NumberConstructor: "number",
   StringConstructor: "string-static",
   ObjectConstructor: "object-static",
+  DateConstructor: "date-static",
 };
 
 function laneOf(
@@ -387,6 +446,9 @@ function laneOf(
   if (carrier.id === pythonJsDataViewTargetId) {
     return { lane: "data-view", bindings: { receiver: carrier } };
   }
+  if (carrier.id === pythonJsRegExpTargetId) {
+    return { lane: "regexp", bindings: { receiver: carrier } };
+  }
   return undefined;
 }
 
@@ -419,6 +481,11 @@ function resolveCarrierRef(reference: JsCarrierRef, bindings: JsLaneBindings): T
   }
 }
 
+function firstArgumentId(request: JsOperationRequest): string | undefined {
+  const carrier = request.argumentCarriers?.[0];
+  return carrier?.kind === "target-named" ? carrier.id : undefined;
+}
+
 export function selectJsSurfaceOperation(request: JsOperationRequest): JsOperationSelection | undefined {
   const laneMatch = laneOf(request.receiverCarrier, request.ownerName);
   if (laneMatch === undefined) {
@@ -429,7 +496,12 @@ export function selectJsSurfaceOperation(request: JsOperationRequest): JsOperati
     candidate.owner === request.ownerName &&
     candidate.member === request.memberName &&
     candidate.operationKind === request.operationKind &&
-    candidate.lane === lane);
+    candidate.lane === lane &&
+    (candidate.firstArgCarrierId === undefined
+      ? firstArgumentId(request) === undefined || !jsOperationRows.some((other) =>
+          other.owner === candidate.owner && other.member === candidate.member &&
+          other.operationKind === candidate.operationKind && other.firstArgCarrierId === firstArgumentId(request))
+      : candidate.firstArgCarrierId === firstArgumentId(request)));
   if (row === undefined) {
     return undefined;
   }
@@ -459,8 +531,11 @@ interface JsConstructorRowData {
   readonly typeArgumentCount: number;
   readonly argumentCount: number;
   readonly target: PythonCapabilityOperationForm;
-  readonly result: "map" | "set" | "date" | "js-array" | "typed-array" | "array-buffer" | "data-view";
+  readonly result: "map" | "set" | "date" | "js-array" | "typed-array" | "array-buffer" | "data-view" | "regexp";
   readonly params?: readonly (JsCarrierRef | undefined)[];
+  // Compile-time facts prove only literal patterns; the runtime constructor
+  // is the subset authority for what those literals may contain.
+  readonly literalStringArguments?: true;
 }
 
 const jsConstructorRows: readonly JsConstructorRowData[] = [
@@ -479,12 +554,15 @@ const jsConstructorRows: readonly JsConstructorRowData[] = [
     result: "typed-array",
     params: [int32],
   })),
+  { className: "RegExp", typeArgumentCount: 0, argumentCount: 1, target: pythonJsRegExpConstructorForm, result: "regexp", params: [str], literalStringArguments: true },
+  { className: "RegExp", typeArgumentCount: 0, argumentCount: 2, target: pythonJsRegExpConstructorForm, result: "regexp", params: [str, str], literalStringArguments: true },
 ];
 
 export interface JsConstructorRequest {
   readonly className: string;
   readonly typeArgumentCarriers: readonly (TargetTypeRef | undefined)[];
   readonly argumentCarriers: readonly (TargetTypeRef | undefined)[];
+  readonly stringLiteralArguments?: readonly boolean[];
 }
 
 export function selectJsSurfaceConstructor(request: JsConstructorRequest): JsOperationSelection | undefined {
@@ -494,6 +572,13 @@ export function selectJsSurfaceConstructor(request: JsConstructorRequest): JsOpe
     candidate.argumentCount === request.argumentCarriers.length);
   if (row === undefined) {
     return undefined;
+  }
+  if (row.literalStringArguments === true) {
+    const literalFlags = request.stringLiteralArguments;
+    if (literalFlags === undefined || literalFlags.length !== request.argumentCarriers.length ||
+        !literalFlags.every((isLiteral) => isLiteral)) {
+      return undefined;
+    }
   }
   const typeArguments = request.typeArgumentCarriers;
   if (!typeArguments.every((carrier) => carrier !== undefined && isPrimitiveLaneCarrier(carrier))) {
@@ -517,6 +602,8 @@ export function selectJsSurfaceConstructor(request: JsConstructorRequest): JsOpe
     resultCarrier = pythonJsTypedArrayTargetType();
   } else if (row.result === "array-buffer") {
     resultCarrier = pythonJsArrayBufferTargetType();
+  } else if (row.result === "regexp") {
+    resultCarrier = pythonJsRegExpTargetType();
   } else {
     resultCarrier = pythonJsDataViewTargetType();
   }

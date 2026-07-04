@@ -784,6 +784,87 @@ print("PARSE-OK")
   assert.match(run.stdout, /JS-COMPAT-OK/u);
 });
 
+test("JS parity closure lanes execute as one generated compat script", () => {
+  const target = { id: "python", options: { typescriptCompatibility: "compat", outputType: "script", packageName: "parity_proof" } };
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+export function checkRegexp(): boolean {
+  const re = new RegExp("a(b+)c", "g");
+  const viaLiteral = /\\d+/.test("id-42");
+  const swapped = "abbc abc".replace(/b+/g, "B");
+  const parts = "a,b,,c".split(/,/g);
+  const where = "xxabc".search(/abc/);
+  return viaLiteral && re.test("xabbcx") && swapped === "aBc aBc" && parts.length === 4 && where === 2;
+}
+
+export function checkStrings(): boolean {
+  const upper = "straße".toUpperCase();
+  const lower = "STRASSE".toLowerCase();
+  const joined = "a".concat("b", "c");
+  const replaced = "notes.txt".replace(".txt", ".md");
+  return upper === "STRASSE" && lower === "strasse" && joined === "abc" && replaced === "notes.md";
+}
+
+export function checkDates(): boolean {
+  const stamp = Date.parse("1970-01-02T00:00:00Z");
+  const clock = Date.now();
+  return stamp === 86400000 && clock > 0;
+}
+
+export function checkTypedWrites(): boolean {
+  const values = [7, 9];
+  const sink = new Int32Array(4);
+  sink.set(values, 1);
+  return sink[1] === 7 && sink[2] === 9;
+}
+
+export function checkDynamic(payload: string): boolean {
+  const value = JSON.parse(payload);
+  value["extra"] = JSON.parse("5");
+  const before = JSON.stringify(value);
+  delete value["extra"];
+  const after = JSON.stringify(value);
+  return before !== after;
+}
+
+export function main(): void {
+  const regexpOk: boolean = checkRegexp();
+  const stringsOk: boolean = checkStrings();
+  const datesOk: boolean = checkDates();
+  const typedOk: boolean = checkTypedWrites();
+  const dynamicOk: boolean = checkDynamic("{\\"k\\": 1}");
+  const allOk: boolean = regexpOk && stringsOk && datesOk && typedOk && dynamicOk;
+  if (!allOk) {
+    throw new Error("parity lane failed");
+  }
+}
+`,
+    },
+    target,
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_js_parity", result.artifacts);
+  const parityEnv = {
+    ...process.env,
+    PYTHONPATH: [join(projectRoot, "src"), pythonJsRuntimeRoot].join(":"),
+  };
+  runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot, env: parityEnv });
+  runPython(["-m", "parity_proof"], { cwd: projectRoot, timeout: 20000, env: parityEnv });
+
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "from parity_proof.index import main",
+    "",
+    "main()",
+    'print("JS-PARITY-CLOSURE-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], { cwd: projectRoot, env: parityEnv });
+  assert.match(run.stdout, /JS-PARITY-CLOSURE-OK/u);
+});
+
 test("generated modules parse under the python ast module", () => {
   const { result } = compilePython({
     files: {
