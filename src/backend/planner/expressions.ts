@@ -17,6 +17,7 @@ import {
   KindParenthesizedExpression,
   KindPostfixUnaryExpression,
   KindPrefixUnaryExpression,
+  KindRegularExpressionLiteral,
   KindPropertyAccessExpression,
   KindStringLiteral,
   KindTemplateExpression,
@@ -164,6 +165,9 @@ export function planExpression(node: Node, context: PythonPlanContext): PythonEx
     }
     case KindOmittedExpression: {
       return planOmittedElement(node, context);
+    }
+    case KindRegularExpressionLiteral: {
+      return planRegularExpressionLiteral(node, context);
     }
     case "KindObjectLiteralExpression": {
       return planRecordLiteral(node, context);
@@ -959,6 +963,42 @@ function isImportBindingValue(value: unknown): value is PythonImportBinding {
     return typeof binding.module === "string" && (binding.name === undefined || typeof binding.name === "string");
   }
   return false;
+}
+
+// Regex literals lower through a finalized constructor row; the pattern and
+// flags are the literal's own data (like string literal text), split at the
+// closing solidus. Dynamic patterns have no literal proof and record no fact.
+function planRegularExpressionLiteral(node: Node, context: PythonPlanContext): PythonExpression | undefined {
+  const fact = pythonOperationFact(node, context);
+  if (fact === undefined || fact.kind !== "capability-operation" ||
+    (fact.target.form !== "constructor" && fact.target.form !== "call")) {
+    context.diagnostics.push(missingFactDiagnostic(
+      diagnosticInput(context, node),
+      "python.capability.regexp",
+      "Regular expression literals require a finalized runtime constructor fact.",
+    ));
+    return undefined;
+  }
+  const text = context.input.ast.text(node);
+  const closingSolidus = text.lastIndexOf("/");
+  if (!text.startsWith("/") || closingSolidus <= 0) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.capability.regexp",
+      "Regular expression literal text is not in /pattern/flags form.",
+    ));
+    return undefined;
+  }
+  const pattern = text.slice(1, closingSolidus);
+  const flags = text.slice(closingSolidus + 1);
+  return {
+    kind: "call",
+    callee: importBindingExpression(context, fact.target.import),
+    args: [
+      { kind: "string-literal", value: pattern },
+      { kind: "string-literal", value: flags },
+    ],
+  };
 }
 
 // Sparse array literals lower through a companion capability-operation fact

@@ -16,6 +16,7 @@ export const pythonJsMapTargetId = "python.js.JsMap";
 export const pythonJsSetTargetId = "python.js.JsSet";
 export const pythonJsDateTargetId = "python.js.JsDate";
 export const pythonJsObjectTargetId = "python.js.JsObject";
+export const pythonJsRegExpTargetId = "python.js.JsRegExp";
 
 export function pythonSourcePrimitiveTargetType(kind: SourcePrimitiveKind): TargetTypeRef {
   return { kind: "source-primitive", name: kind };
@@ -244,4 +245,12 @@ const pythonJsCompatTargetIds: ReadonlySet<string> = new Set([
 
 export function isPythonJsCompatCarrier(carrier: TargetTypeRef | undefined): boolean {
   return carrier?.kind === "target-named" && pythonJsCompatTargetIds.has(carrier.id);
+}
+
+export function pythonJsRegExpTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsRegExpTargetId };
+}
+
+export function isPythonJsRegExpCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && carrier.id === pythonJsRegExpTargetId;
 }

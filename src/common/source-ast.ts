@@ -10,6 +10,7 @@ export const KindNullKeyword = "KindNullKeyword";
 export const KindNoSubstitutionTemplateLiteral = "KindNoSubstitutionTemplateLiteral";
 export const KindTemplateExpression = "KindTemplateExpression";
 export const KindTemplateSpan = "KindTemplateSpan";
+export const KindRegularExpressionLiteral = "KindRegularExpressionLiteral";
 export const KindBooleanKeyword = "KindBooleanKeyword";
 export const KindCallExpression = "KindCallExpression";
 export const KindElementAccessExpression = "KindElementAccessExpression";
