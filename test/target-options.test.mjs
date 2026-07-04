@@ -34,15 +34,12 @@ test("python target options accept explicit supported values", () => {
   assert.equal(readPythonTypescriptCompatibilityMode(selection), "strict-native");
 });
 
-test("compat mode is rejected while no compat runtime is wired", () => {
-  assert.throws(
-    () => readPythonTypescriptCompatibilityMode(target({ typescriptCompatibility: "compat" })),
-    /rejects 'compat'.*python-js/u,
+test("compat mode selects the wired python-js runtime lane", () => {
+  assert.equal(
+    readPythonTypescriptCompatibilityMode(target({ typescriptCompatibility: "compat" })),
+    "compat",
   );
-  assert.throws(
-    () => validatePythonTargetOptions(target({ typescriptCompatibility: "compat" })),
-    /rejects 'compat'/u,
-  );
+  validatePythonTargetOptions(target({ typescriptCompatibility: "compat" }));
 });
 
 test("python target options reject unknown keys", () => {
@@ -61,7 +58,7 @@ test("python target options reject invalid values", () => {
   assert.throws(() => readPythonOutputType(target({ outputType: "Exe" })), /'package' or 'script'/);
   assert.throws(
     () => readPythonTypescriptCompatibilityMode(target({ typescriptCompatibility: "loose" })),
-    /'strict-native'/,
+    /'strict-native' or 'compat'/,
   );
   assert.throws(() => validatePythonTargetOptions(target({ packageName: "My-App" })), /packageName/);
 });

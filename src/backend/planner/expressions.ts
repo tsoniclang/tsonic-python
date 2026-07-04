@@ -13,9 +13,12 @@ import {
   KindNoSubstitutionTemplateLiteral,
   KindNullKeyword,
   KindNumericLiteral,
+  KindOmittedExpression,
   KindParenthesizedExpression,
   KindPostfixUnaryExpression,
   KindPrefixUnaryExpression,
+  KindDeleteExpression,
+  KindRegularExpressionLiteral,
   KindPropertyAccessExpression,
   KindStringLiteral,
   KindTemplateExpression,
@@ -26,6 +29,8 @@ import {
   Node_SyntaxField,
   PrefixUnaryExpression_Operand,
   unwrapParenthesized,
+  BinaryExpression_OperatorToken,
+  KindExclamationEqualsEqualsToken,
 } from "../../common/source-ast.js";
 import { pythonTargetOperationFactKey } from "../../source/python-facts/keys.js";
 import type {
@@ -158,6 +163,15 @@ export function planExpression(node: Node, context: PythonPlanContext): PythonEx
     }
     case KindArrayLiteralExpression: {
       return planArrayLiteral(node, context);
+    }
+    case KindOmittedExpression: {
+      return planOmittedElement(node, context);
+    }
+    case KindRegularExpressionLiteral: {
+      return planRegularExpressionLiteral(node, context);
+    }
+    case KindDeleteExpression: {
+      return planDeleteExpression(node, context);
     }
     case "KindObjectLiteralExpression": {
       return planRecordLiteral(node, context);
@@ -418,6 +432,25 @@ function planIdentifier(node: Node, context: PythonPlanContext): PythonExpressio
 
 function planUnaryExpression(node: Node, context: PythonPlanContext): PythonExpression | undefined {
   const fact = pythonOperationFact(node, context);
+  // Capability-operation facts take precedence over the operator-token path:
+  // the row's import binding decides the lowering. Only a free call over the
+  // operand is sound here — fn(operand) — and only for prefix operators;
+  // every other target form has no proven receiver and fails closed.
+  if (fact !== undefined && fact.kind === "capability-operation") {
+    if (fact.target.form !== "call" || context.input.ast.kindName(node) !== KindPrefixUnaryExpression) {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, node),
+        "python.capability.operator",
+        "Unary capability operations lower only from prefix operators with call-form targets.",
+      ));
+      return undefined;
+    }
+    const operandNode = PrefixUnaryExpression_Operand(node);
+    const operand = operandNode === undefined ? undefined : planExpression(operandNode, context);
+    return operand === undefined
+      ? undefined
+      : { kind: "call", callee: importBindingExpression(context, fact.target.import), args: [operand] };
+  }
   if (fact === undefined || fact.kind !== "operator-token") {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
@@ -456,6 +489,30 @@ function planBinaryExpression(node: Node, context: PythonPlanContext): PythonExp
   const right = rightNode === undefined ? undefined : planExpression(rightNode, context);
   if (left === undefined || right === undefined) {
     return undefined;
+  }
+  // Capability-operation facts run before the operator-token path: the row's
+  // import binding lowers the whole expression to fn(left, right). Only the
+  // call form is sound on a binary node (neither operand is a proven
+  // receiver), so every other target form fails closed.
+  if (fact.kind === "capability-operation") {
+    if (fact.target.form !== "call") {
+      context.diagnostics.push(unsupportedConstructDiagnostic(
+        diagnosticInput(context, node),
+        "python.capability.operator",
+        "Binary capability operations lower only through call-form targets.",
+      ));
+      return undefined;
+    }
+    const call: PythonExpression = {
+      kind: "call",
+      callee: importBindingExpression(context, fact.target.import),
+      args: [left, right],
+    };
+    // Strict inequality reuses the equality row; the negation is structural.
+    const operatorToken = BinaryExpression_OperatorToken(node);
+    const negated = operatorToken !== undefined &&
+      context.input.ast.kindName(operatorToken) === KindExclamationEqualsEqualsToken;
+    return negated ? { kind: "unary", operator: "not", operand: call } : call;
   }
   if (fact.kind === "string-concat") {
     return { kind: "binary", operator: "+", left, right };
@@ -497,7 +554,7 @@ export function planArguments(node: Node, context: PythonPlanContext): readonly 
 
 // Structural import binding for a mapped operation. Module and name text come
 // from metadata rows, never from source spelling.
-function importBindingExpression(context: PythonPlanContext, binding: PythonImportBinding): PythonExpression {
+export function importBindingExpression(context: PythonPlanContext, binding: PythonImportBinding): PythonExpression {
   if (binding.style === "from") {
     collectFromImport(context, binding.module, binding.name);
     return { kind: "name", name: binding.name };
@@ -516,13 +573,52 @@ function planProviderOperationExpression(
   form: PythonCapabilityOperationForm,
   receiverNode: Node | undefined,
   args: readonly PythonExpression[],
+  literalArguments: readonly string[] = [],
 ): PythonExpression | undefined {
+  // Fact-proven string literals (dynamic property names) insert immediately
+  // after the planned receiver.
+  const literalExpressions: readonly PythonExpression[] =
+    literalArguments.map((value) => ({ kind: "string-literal", value }));
   switch (form.form) {
-    case "call":
+    case "call": {
+      // Rows marked receiverArgument pass the planned receiver as the first
+      // call argument ahead of the source arguments (JS-surface free helpers
+      // over native receivers). Such a row without a receiver site is
+      // unsatisfiable and fails closed.
+      if (form.receiverArgument === true) {
+        const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
+        if (receiver === undefined) {
+          return undefined;
+        }
+        return {
+          kind: "call",
+          callee: importBindingExpression(context, form.import),
+          args: [receiver, ...literalExpressions, ...args],
+        };
+      }
+      return literalExpressions.length === 0
+        ? { kind: "call", callee: importBindingExpression(context, form.import), args }
+        : undefined;
+    }
     case "constructor": {
       return { kind: "call", callee: importBindingExpression(context, form.import), args };
     }
     case "method": {
+      // Rows marked argumentReceiver anchor the runtime subject on the first
+      // planned source argument and pass the planned source receiver as the
+      // first runtime argument: text.replace(re, r) lowers re.replace(text, r).
+      if (form.argumentReceiver === true) {
+        const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
+        const anchor = args[0];
+        if (receiver === undefined || anchor === undefined) {
+          return undefined;
+        }
+        return {
+          kind: "call",
+          callee: { kind: "attribute", value: anchor, name: form.name },
+          args: [receiver, ...args.slice(1)],
+        };
+      }
       const receiver = receiverNode === undefined ? undefined : planExpression(receiverNode, context);
       if (receiver === undefined) {
         return undefined;
@@ -629,7 +725,7 @@ function planCallExpression(node: Node, context: PythonPlanContext): PythonExpre
     return undefined;
   }
   if (fact !== undefined && fact.kind === "capability-operation") {
-    const planned = planProviderOperationExpression(context, fact.target, receiverNode, args);
+    const planned = planProviderOperationExpression(context, fact.target, receiverNode, args, fact.literalArguments ?? []);
     if (planned === undefined) {
       context.diagnostics.push(unsupportedConstructDiagnostic(
         diagnosticInput(context, node),
@@ -796,7 +892,7 @@ function planPropertyAccess(node: Node, context: PythonPlanContext): PythonExpre
     ));
     return undefined;
   }
-  const planned = planProviderOperationExpression(context, fact.target, Node_Expression(node), []);
+  const planned = planProviderOperationExpression(context, fact.target, Node_Expression(node), [], fact.literalArguments ?? []);
   if (planned === undefined) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
@@ -845,7 +941,7 @@ function planElementAccess(node: Node, context: PythonPlanContext): PythonExpres
     ));
     return undefined;
   }
-  const planned = planProviderOperationExpression(context, fact.target, Node_Expression(node), [index]);
+  const planned = planProviderOperationExpression(context, fact.target, Node_Expression(node), [index], fact.literalArguments ?? []);
   if (planned === undefined) {
     context.diagnostics.push(unsupportedConstructDiagnostic(
       diagnosticInput(context, node),
@@ -856,10 +952,160 @@ function planElementAccess(node: Node, context: PythonPlanContext): PythonExpres
   return planned;
 }
 
+// Array holes have no lowering of their own spelling: an omitted element is
+// representable only through its own finalized capability-operation fact
+// (typically a static-attribute import naming the sparse-hole sentinel). The
+// fact's target form decides the lowering; receiver-shaped forms have no
+// receiver here and fail closed.
+function planOmittedElement(node: Node, context: PythonPlanContext): PythonExpression | undefined {
+  const fact = pythonOperationFact(node, context);
+  if (fact === undefined || fact.kind !== "capability-operation") {
+    context.diagnostics.push(missingFactDiagnostic(
+      diagnosticInput(context, node),
+      "python.capability.array-hole",
+      "Omitted array elements require a finalized provider operation fact.",
+    ));
+    return undefined;
+  }
+  const planned = planProviderOperationExpression(context, fact.target, undefined, []);
+  if (planned === undefined) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.capability.array-hole",
+      "Provider operation for an omitted array element could not be lowered.",
+    ));
+  }
+  return planned;
+}
+
+// Structural validation for fact values read through the untyped fact-entry
+// scan below. Values must be plain data shaped exactly like the declared
+// import binding contract; anything else is not a usable binding.
+function isImportBindingValue(value: unknown): value is PythonImportBinding {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const binding = value as { readonly style?: unknown; readonly module?: unknown; readonly name?: unknown };
+  if (binding.style === "from") {
+    return typeof binding.module === "string" && typeof binding.name === "string";
+  }
+  if (binding.style === "module") {
+    return typeof binding.module === "string" && (binding.name === undefined || typeof binding.name === "string");
+  }
+  return false;
+}
+
+// Delete expressions lower through the capability fact recorded on the
+// delete node: a receiver-argument call receiving the planned target and the
+// planned (or fact-proven literal) key.
+function planDeleteExpression(node: Node, context: PythonPlanContext): PythonExpression | undefined {
+  const fact = pythonOperationFact(node, context);
+  if (fact === undefined || fact.kind !== "capability-operation") {
+    context.diagnostics.push(missingFactDiagnostic(
+      diagnosticInput(context, node),
+      "python.capability.delete",
+      "Delete expressions require a finalized runtime delete fact.",
+    ));
+    return undefined;
+  }
+  const operand = unwrapParenthesized(context.input.ast, Node_Expression(node));
+  if (operand === undefined || context.input.ast.kindName(operand) !== KindElementAccessExpression) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.capability.delete",
+      "Delete lowers only over element accesses on runtime carriers.",
+    ));
+    return undefined;
+  }
+  const keyNode = ElementAccessExpression_ArgumentExpression(operand);
+  const key = keyNode === undefined ? undefined : planExpression(keyNode, context);
+  if (key === undefined) {
+    return undefined;
+  }
+  return planProviderOperationExpression(context, fact.target, Node_Expression(operand), [key], fact.literalArguments ?? []);
+}
+
+// Regex literals lower through a finalized constructor row; the pattern and
+// flags are the literal's own data (like string literal text), split at the
+// closing solidus. Dynamic patterns have no literal proof and record no fact.
+function planRegularExpressionLiteral(node: Node, context: PythonPlanContext): PythonExpression | undefined {
+  const fact = pythonOperationFact(node, context);
+  if (fact === undefined || fact.kind !== "capability-operation" ||
+    (fact.target.form !== "constructor" && fact.target.form !== "call")) {
+    context.diagnostics.push(missingFactDiagnostic(
+      diagnosticInput(context, node),
+      "python.capability.regexp",
+      "Regular expression literals require a finalized runtime constructor fact.",
+    ));
+    return undefined;
+  }
+  const text = context.input.ast.text(node);
+  const closingSolidus = text.lastIndexOf("/");
+  if (!text.startsWith("/") || closingSolidus <= 0) {
+    context.diagnostics.push(unsupportedConstructDiagnostic(
+      diagnosticInput(context, node),
+      "python.capability.regexp",
+      "Regular expression literal text is not in /pattern/flags form.",
+    ));
+    return undefined;
+  }
+  const pattern = text.slice(1, closingSolidus);
+  const flags = text.slice(closingSolidus + 1);
+  return {
+    kind: "call",
+    callee: importBindingExpression(context, fact.target.import),
+    args: [
+      { kind: "string-literal", value: pattern },
+      { kind: "string-literal", value: flags },
+    ],
+  };
+}
+
+// Sparse array literals lower through a companion capability-operation fact
+// recorded on the same literal node. The companion cannot share the primary
+// operation fact key (that slot holds the sparse-lane array-literal fact), so
+// it is located structurally across the node's fact entries: any value shaped
+// like a capability operation with a call or constructor import target
+// qualifies. Nothing here reads source spelling.
+function companionCapabilityCallTarget(
+  node: Node,
+  context: PythonPlanContext,
+): { readonly form: "call" | "constructor"; readonly import: PythonImportBinding } | undefined {
+  for (const entry of context.input.facts.getFacts(node)) {
+    const value = entry.value;
+    if (typeof value !== "object" || value === null) {
+      continue;
+    }
+    const candidate = value as { readonly kind?: unknown; readonly target?: unknown };
+    if (candidate.kind !== "capability-operation" || typeof candidate.target !== "object" || candidate.target === null) {
+      continue;
+    }
+    const target = candidate.target as { readonly form?: unknown; readonly import?: unknown; readonly receiverArgument?: unknown };
+    const form = target.form === "call" || target.form === "constructor" ? target.form : undefined;
+    // A literal site has no receiver, so receiver-argument call rows are
+    // unsatisfiable here.
+    if (form === undefined || target.receiverArgument === true || !isImportBindingValue(target.import)) {
+      continue;
+    }
+    return { form, import: target.import };
+  }
+  return undefined;
+}
+
 export function planArrayLiteral(node: Node, context: PythonPlanContext): PythonExpression | undefined {
   const fact = pythonOperationFact(node, context);
   const isTupleLiteral = fact !== undefined && fact.kind === "tuple-literal";
-  if (!isTupleLiteral && (fact === undefined || fact.kind !== "array-literal" || fact.lane !== "dense")) {
+  // Defensive fact-subject handling mirror: a sparse literal may carry the
+  // capability-operation fact directly in the primary slot instead of a
+  // sparse-lane array-literal fact plus companion.
+  const directCapabilityTarget = fact !== undefined && fact.kind === "capability-operation" &&
+    (fact.target.form === "constructor" ||
+      (fact.target.form === "call" && fact.target.receiverArgument !== true))
+    ? fact.target
+    : undefined;
+  const isSparse = (fact !== undefined && fact.kind === "array-literal" && fact.lane === "sparse") ||
+    directCapabilityTarget !== undefined;
+  if (!isTupleLiteral && !isSparse && (fact === undefined || fact.kind !== "array-literal" || fact.lane !== "dense")) {
     context.diagnostics.push(missingFactDiagnostic(
       diagnosticInput(context, node),
       "python.backend.array-literal",
@@ -877,6 +1123,28 @@ export function planArrayLiteral(node: Node, context: PythonPlanContext): Python
       return undefined;
     }
     elements.push(planned);
+  }
+  if (isSparse) {
+    // A sparse-lane literal lowers to the companion provider call with the
+    // planned elements as arguments in source order (holes lower through
+    // their own omitted-element facts). No companion fact means the sparse
+    // lane has no owner and the literal fails closed.
+    const target = directCapabilityTarget ?? companionCapabilityCallTarget(node, context);
+    if (target === undefined) {
+      context.diagnostics.push(missingFactDiagnostic(
+        diagnosticInput(context, node),
+        "python.capability.array-literal",
+        "Sparse array literals require a companion provider call or constructor fact.",
+      ));
+      return undefined;
+    }
+    // The runtime builder takes one iterable of element values, not
+    // positional element arguments.
+    return {
+      kind: "call",
+      callee: importBindingExpression(context, target.import),
+      args: [{ kind: "list", elements }],
+    };
   }
   // The printer has no lowering for an empty tuple display; a zero-element
   // tuple literal has no owning lane and fails closed here.

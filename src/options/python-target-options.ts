@@ -75,14 +75,8 @@ export function readPythonTypescriptCompatibilityMode(target: TargetSelection): 
   if (value === undefined) {
     return "strict-native";
   }
-  // Compat mode requires the python-js runtime package; without a wired
-  // compat lane, selecting it fails closed instead of silently enabling
-  // dynamic behavior.
-  if (value === "compat") {
-    throw new Error("Python target option 'typescriptCompatibility' rejects 'compat': the python-js compat runtime is not wired into this target.");
-  }
-  if (value !== "strict-native") {
-    throw new Error("Python target option 'typescriptCompatibility' must be 'strict-native'.");
+  if (value !== "strict-native" && value !== "compat") {
+    throw new Error("Python target option 'typescriptCompatibility' must be either 'strict-native' or 'compat'.");
   }
   return value;
 }

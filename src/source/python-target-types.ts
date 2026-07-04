@@ -10,6 +10,13 @@ export const pythonStrTargetId = "python.str";
 export const pythonExceptionTargetId = "python.Exception";
 export const pythonOptionalTargetId = "python.Optional";
 export const pythonDictTargetId = "python.dict";
+export const pythonJsValueTargetId = "python.js.JsValue";
+export const pythonJsArrayTargetId = "python.js.JsArray";
+export const pythonJsMapTargetId = "python.js.JsMap";
+export const pythonJsSetTargetId = "python.js.JsSet";
+export const pythonJsDateTargetId = "python.js.JsDate";
+export const pythonJsObjectTargetId = "python.js.JsObject";
+export const pythonJsRegExpTargetId = "python.js.JsRegExp";
 
 export function pythonSourcePrimitiveTargetType(kind: SourcePrimitiveKind): TargetTypeRef {
   return { kind: "source-primitive", name: kind };
@@ -171,4 +178,83 @@ export function isPythonJsonSerializableCarrier(carrier: TargetTypeRef | undefin
     return carrier.elements.every((element) => isPythonJsonSerializableCarrier(element));
   }
   return false;
+}
+
+export function pythonJsValueTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsValueTargetId };
+}
+
+export function isPythonJsValueCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && carrier.id === pythonJsValueTargetId;
+}
+
+export function pythonJsArrayTargetType(element: TargetTypeRef): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsArrayTargetId, typeArguments: [element] };
+}
+
+export function isPythonJsArrayCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && carrier.id === pythonJsArrayTargetId;
+}
+
+export function pythonJsMapTargetType(key: TargetTypeRef, value: TargetTypeRef): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsMapTargetId, typeArguments: [key, value] };
+}
+
+export function pythonJsSetTargetType(value: TargetTypeRef): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsSetTargetId, typeArguments: [value] };
+}
+
+export function pythonJsDateTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsDateTargetId };
+}
+
+export function pythonJsObjectTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsObjectTargetId };
+}
+
+export function isPythonJsObjectCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && carrier.id === pythonJsObjectTargetId;
+}
+
+// Typed-array lane carriers: one shared carrier covers every concrete typed
+// array class (their member surface is uniform); the concrete class name
+// lives only in constructor rows.
+export const pythonJsTypedArrayTargetId = "python.js.TypedArray";
+export const pythonJsArrayBufferTargetId = "python.js.ArrayBuffer";
+export const pythonJsDataViewTargetId = "python.js.DataView";
+
+export function pythonJsTypedArrayTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsTypedArrayTargetId };
+}
+
+export function pythonJsArrayBufferTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsArrayBufferTargetId };
+}
+
+export function pythonJsDataViewTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsDataViewTargetId };
+}
+
+const pythonJsCompatTargetIds: ReadonlySet<string> = new Set([
+  pythonJsValueTargetId,
+  pythonJsArrayTargetId,
+  pythonJsMapTargetId,
+  pythonJsSetTargetId,
+  pythonJsDateTargetId,
+  pythonJsObjectTargetId,
+  pythonJsTypedArrayTargetId,
+  pythonJsArrayBufferTargetId,
+  pythonJsDataViewTargetId,
+]);
+
+export function isPythonJsCompatCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && pythonJsCompatTargetIds.has(carrier.id);
+}
+
+export function pythonJsRegExpTargetType(): TargetTypeRef {
+  return { kind: "target-named", id: pythonJsRegExpTargetId };
+}
+
+export function isPythonJsRegExpCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && carrier.id === pythonJsRegExpTargetId;
 }

@@ -12,6 +12,7 @@ import {
   acmePlatformCapability,
   compilePython,
   fixturePackagesRoot,
+  pythonJsRuntimeRoot,
 } from "./helpers/python-session.mjs";
 import {
   createPythonAsyncioCapability,
@@ -665,6 +666,203 @@ export function encodePair(): string {
     env: { ...process.env, PYTHONPATH: join(projectRoot, "src") },
   });
   assert.match(run.stdout, /JSON-ROUNDTRIP-OK/u);
+});
+
+test("JS compat lanes execute against the real tsonic_python_js runtime", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+export function sparseProbe(): number {
+  const xs = [10, , 30];
+  xs.push(40);
+  if (xs.includes(30) && xs.at(1) === undefined) {
+    return xs.length;
+  }
+  return xs.indexOf(99);
+}
+
+export function stringProbe(text: string): number {
+  if (text.startsWith("he") && text.includes("ll")) {
+    return text.charCodeAt(1);
+  }
+  return text.charCodeAt(0);
+}
+
+export function lengthProbe(text: string): number {
+  return text.length;
+}
+
+export function equalityProbe(a: number, b: number): boolean {
+  return Object.is(a, b);
+}
+
+export function jsonProbe(payload: string): string {
+  const value = JSON.parse(payload);
+  return JSON.stringify(value);
+}
+
+export function dynamicProbe(payload: string): string {
+  const value = JSON.parse(payload);
+  return JSON.stringify(value["inner"]);
+}
+
+export function collectionsProbe(): number {
+  const table = new Map<string, number>();
+  table.set("a", 3);
+  table.set("b", 4);
+  const tags = new Set<string>();
+  tags.add("x");
+  tags.add("x");
+  return table.size + tags.size;
+}
+
+export function dateProbe(): number {
+  const when = new Date(86400000);
+  return when.getUTCFullYear() + when.getUTCDate();
+}
+
+export function typedProbe(): number {
+  const buffer = new ArrayBuffer(8);
+  const view = new DataView(buffer);
+  view.setInt32(0, 41);
+  return view.getInt32(0) + view.byteLength;
+}
+`,
+    },
+    target: { id: "python", options: { typescriptCompatibility: "compat" } },
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const moduleText = result.artifacts.find((artifact) => artifact.path === "src/tsonic_generated/index.py").text;
+  assert.match(moduleText, /tsonic_python_js/u);
+  assert.match(result.artifacts.find((artifact) => artifact.path === "pyproject.toml").text, /"tsonic-python-js",/u);
+
+  const projectRoot = materialize("exec_js_compat", result.artifacts);
+  const compatEnv = {
+    ...process.env,
+    PYTHONPATH: [join(projectRoot, "src"), pythonJsRuntimeRoot].join(":"),
+  };
+  const compileRun = runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot, env: compatEnv });
+  assert.equal(compileRun.status ?? 0, 0);
+  runPython(["-c", `
+import ast, pathlib
+for path in pathlib.Path("src").rglob("*.py"):
+    ast.parse(path.read_text())
+print("PARSE-OK")
+`], { cwd: projectRoot });
+
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "import json",
+    "",
+    "from tsonic_generated.index import (",
+    "    collectionsProbe,",
+    "    dateProbe,",
+    "    dynamicProbe,",
+    "    equalityProbe,",
+    "    lengthProbe,",
+    "    jsonProbe,",
+    "    sparseProbe,",
+    "    stringProbe,",
+    "    typedProbe,",
+    ")",
+    "",
+    "assert sparseProbe() == 4, sparseProbe()",
+    'assert stringProbe("hello") == 101, stringProbe("hello")',
+    'assert lengthProbe("hello") == 5',
+    "assert equalityProbe(2.0, 2.0) is True",
+    "assert equalityProbe(2.0, 3.0) is False",
+    'assert json.loads(jsonProbe(\'{"k": [1, null, true]}\')) == {"k": [1, None, True]}',
+    'assert json.loads(dynamicProbe(\'{"inner": {"deep": 7}}\')) == {"deep": 7}',
+    "assert collectionsProbe() == 3",
+    "assert dateProbe() == 1972, dateProbe()",
+    "assert typedProbe() == 49",
+    'print("JS-COMPAT-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], { cwd: projectRoot, env: compatEnv });
+  assert.match(run.stdout, /JS-COMPAT-OK/u);
+});
+
+test("JS parity closure lanes execute as one generated compat script", () => {
+  const target = { id: "python", options: { typescriptCompatibility: "compat", outputType: "script", packageName: "parity_proof" } };
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+export function checkRegexp(): boolean {
+  const re = new RegExp("a(b+)c", "g");
+  const viaLiteral = /\\d+/.test("id-42");
+  const swapped = "abbc abc".replace(/b+/g, "B");
+  const parts = "a,b,,c".split(/,/g);
+  const where = "xxabc".search(/abc/);
+  return viaLiteral && re.test("xabbcx") && swapped === "aBc aBc" && parts.length === 4 && where === 2;
+}
+
+export function checkStrings(): boolean {
+  const upper = "straße".toUpperCase();
+  const lower = "STRASSE".toLowerCase();
+  const joined = "a".concat("b", "c");
+  const replaced = "notes.txt".replace(".txt", ".md");
+  return upper === "STRASSE" && lower === "strasse" && joined === "abc" && replaced === "notes.md";
+}
+
+export function checkDates(): boolean {
+  const stamp = Date.parse("1970-01-02T00:00:00Z");
+  const clock = Date.now();
+  return stamp === 86400000 && clock > 0;
+}
+
+export function checkTypedWrites(): boolean {
+  const values = [7, 9];
+  const sink = new Int32Array(4);
+  sink.set(values, 1);
+  return sink[1] === 7 && sink[2] === 9;
+}
+
+export function checkDynamic(payload: string): boolean {
+  const value = JSON.parse(payload);
+  value["extra"] = JSON.parse("5");
+  const before = JSON.stringify(value);
+  delete value["extra"];
+  const after = JSON.stringify(value);
+  return before !== after;
+}
+
+export function main(): void {
+  const regexpOk: boolean = checkRegexp();
+  const stringsOk: boolean = checkStrings();
+  const datesOk: boolean = checkDates();
+  const typedOk: boolean = checkTypedWrites();
+  const dynamicOk: boolean = checkDynamic("{\\"k\\": 1}");
+  const allOk: boolean = regexpOk && stringsOk && datesOk && typedOk && dynamicOk;
+  if (!allOk) {
+    throw new Error("parity lane failed");
+  }
+}
+`,
+    },
+    target,
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const projectRoot = materialize("exec_js_parity", result.artifacts);
+  const parityEnv = {
+    ...process.env,
+    PYTHONPATH: [join(projectRoot, "src"), pythonJsRuntimeRoot].join(":"),
+  };
+  runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot, env: parityEnv });
+  runPython(["-m", "parity_proof"], { cwd: projectRoot, timeout: 20000, env: parityEnv });
+
+  const runnerFile = join(projectRoot, "runner.py");
+  writeFileSync(runnerFile, [
+    "from parity_proof.index import main",
+    "",
+    "main()",
+    'print("JS-PARITY-CLOSURE-OK")',
+    "",
+  ].join("\n"));
+  const run = runPython([runnerFile], { cwd: projectRoot, env: parityEnv });
+  assert.match(run.stdout, /JS-PARITY-CLOSURE-OK/u);
 });
 
 test("generated modules parse under the python ast module", () => {

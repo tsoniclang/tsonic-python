@@ -87,11 +87,13 @@ export {
   collectPythonCapabilityOperationRows,
   createPythonTargetCapability,
   createPythonCapabilityBindingProvider,
-  isPythonCapabilityOperationContributor,
+  isPythonCapabilityOperationMapper,
+  pythonOperationRowsMapperKind,
 } from "./source/capabilities/index.js";
 export type {
   PythonCapabilityDependency,
   PythonCapabilityModuleDefinition,
+  PythonCapabilityOperationMapper,
   PythonCapabilityOperationRow,
   PythonCapabilityDefinition,
   PythonTargetCapability,

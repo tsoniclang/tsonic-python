@@ -93,9 +93,10 @@ Third-party Python libraries are installed target-capability plugins built
 with `createPythonTargetCapability`: capability identity and module
 ownership live on the plugin object, capability metadata validates at
 creation (identity-proven rows, Python names, receiver types), and
-activation is import-driven. Operation rows are a Python-owned contract
-interpreted only by this target — the generic capability operation mapper is
-not the operation interface.
+activation is import-driven. Operation rows ride the standard
+`createOperationMappers()` capability hook as a Python-owned mapper subtype
+(`kind: "python-operation-rows"`); only the Python target interprets the
+rows.
 
 Stdlib capabilities are target-owned (`python-math`, `python-pathlib`,
 `python-os`, `python-sys`, `python-datetime`, `python-asyncio`,
@@ -127,8 +128,9 @@ artifacts. That includes sparse arrays, JS array semantics on non-primitive
 elements (`at`, `includes`/`indexOf` over object elements, `.length =`),
 template literals with unproven substitutions, class
 inheritance/generics/accessors, string enums, enum ordering comparisons,
-and the `compat` typescript-compatibility mode (which requires the
-`python-js` runtime package and is rejected at option validation).
+and, in strict-native mode, every JS
+compatibility lane (compat output is selected explicitly through
+`typescriptCompatibility: "compat"` or the `js` surface).
 
 ## Lane ledger
 
@@ -149,6 +151,17 @@ Complete (fact-backed, runtime-proven):
 - Packaging: wheel-ready layout, py.typed, deterministic ordering,
   interpreter gates (3.12/3.13/3.14; absent interpreters are explicit
   environment skips)
+- JS compatibility subset through the tsonic-python-js runtime, selected by
+  compat mode or the js surface: undefined and strict equality, sparse
+  arrays with JsArray methods and index writes, UTF-16 string helpers with
+  at/codePointAt/concat/string replace/case conversion, Number/Math
+  helpers, JSON parse/stringify over JsValue carriers, dynamic
+  read/write/delete lanes, Map/Set, Date with now/parse statics, typed
+  arrays with bulk set and ArrayBuffer/DataView, and the oracle-proven
+  RegExp subset (literal and literal-argument construction; test, replace,
+  split, search; selection by first-argument carrier). The runtime parity
+  inventory lives in the python-js repository (docs/js-parity.md);
+  strict-native output never references the runtime
 
 Hard-reject (fail closed by design, no external dependency):
 
@@ -162,11 +175,14 @@ Hard-reject (fail closed by design, no external dependency):
 - continue inside desugared C-style for; unawaited async calls; tuple
   access with non-literal indexes; source names in the generated-helper
   namespace
+- JS compat members without closed runtime rows: WeakMap/WeakSet, timers,
+  console, fetch, DOM/Web and Node APIs, proxies, symbols, custom toJSON
+  and replacer/reviver, RegExp.exec and dynamic RegExp construction
+  (out-of-subset patterns raise at runtime construction — the runtime
+  engine is the subset authority), and locale surfaces
 
 Blocked by external contract:
 
-- JS compatibility semantics (undefined, sparse arrays, JS equality,
-  dynamic carriers, compat mode): blocked on the python-js runtime package
 - Variadic stdlib APIs (os.path.join and similar): blocked on TSTS
   variadic parameter carriers
 - Promise/awaitable provider declarations: blocked on a promise kind in

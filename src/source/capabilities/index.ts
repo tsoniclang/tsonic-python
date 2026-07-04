@@ -10,6 +10,8 @@ import type {
   TargetTypeRef,
 } from "@tsonic/tsts";
 import type {
+  TargetCapabilityContext,
+  TargetCapabilityOperationMapper,
   TargetCapabilityRuntimeContributionContext,
   TargetRuntimeContributions,
   TargetRuntimeReference,
@@ -62,16 +64,25 @@ export interface PythonCapabilityDefinition {
   readonly targetIdentities?: Readonly<Record<string, string>>;
 }
 
-export interface PythonCapabilityOperationContributor {
-  pythonCapabilityOperations(): readonly PythonCapabilityOperationRow[];
+// Python operation rows ride the standard capability-plugin hook: the
+// plugin's createOperationMappers() returns a Python-owned mapper subtype of
+// the generic TargetCapabilityOperationMapper, and only the Python target
+// interprets its rows.
+export const pythonOperationRowsMapperKind = "python-operation-rows";
+
+export interface PythonCapabilityOperationMapper extends TargetCapabilityOperationMapper {
+  readonly kind: typeof pythonOperationRowsMapperKind;
+  readonly rows: readonly PythonCapabilityOperationRow[];
 }
 
-// A Python target capability is an installed target-capability plugin that
-// additionally exposes Python-owned operation rows. The generic
-// TargetCapabilityOperationMapper is not the operation interface: rows are
-// interpreted only by the Python target.
-export type PythonTargetCapability =
-  TsonicTargetCapabilityPlugin & PythonCapabilityOperationContributor;
+export function isPythonCapabilityOperationMapper(
+  mapper: TargetCapabilityOperationMapper,
+): mapper is PythonCapabilityOperationMapper {
+  return mapper.kind === pythonOperationRowsMapperKind &&
+    Array.isArray((mapper as { readonly rows?: unknown }).rows);
+}
+
+export type PythonTargetCapability = TsonicTargetCapabilityPlugin;
 
 const pythonIdentifierPattern = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const pythonModulePathPattern = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/u;
@@ -244,25 +255,33 @@ export function createPythonTargetCapability(definition: PythonCapabilityDefinit
         })),
       };
     },
-    pythonCapabilityOperations(): readonly PythonCapabilityOperationRow[] {
-      return definition.operations;
+    createOperationMappers(): readonly TargetCapabilityOperationMapper[] {
+      const mapper: PythonCapabilityOperationMapper = {
+        kind: pythonOperationRowsMapperKind,
+        rows: definition.operations,
+      };
+      return [mapper];
     },
   };
 }
 
-export function isPythonCapabilityOperationContributor(
-  value: object,
-): value is PythonCapabilityOperationContributor {
-  return typeof (value as { pythonCapabilityOperations?: unknown }).pythonCapabilityOperations === "function";
-}
-
 export function collectPythonCapabilityOperationRows(
-  installedCapabilities: readonly object[],
+  installedCapabilities: readonly TsonicTargetCapabilityPlugin[],
+  context: {
+    readonly project: TargetCapabilityContext["project"];
+    readonly target: TargetCapabilityContext["target"];
+    readonly targetPack: TargetCapabilityContext["targetPack"];
+    readonly selectedCapabilities: TargetCapabilityContext["selectedCapabilities"];
+    readonly selectedSurfaces: TargetCapabilityContext["selectedSurfaces"];
+  },
 ): readonly PythonCapabilityOperationRow[] {
   const rows: PythonCapabilityOperationRow[] = [];
-  for (const installedCapability of installedCapabilities) {
-    if (isPythonCapabilityOperationContributor(installedCapability)) {
-      rows.push(...installedCapability.pythonCapabilityOperations());
+  for (const capability of installedCapabilities) {
+    const mappers = capability.createOperationMappers?.({ ...context, capability }) ?? [];
+    for (const mapper of mappers) {
+      if (isPythonCapabilityOperationMapper(mapper)) {
+        rows.push(...mapper.rows);
+      }
     }
   }
   return rows;

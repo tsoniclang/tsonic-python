@@ -12,10 +12,14 @@ test("python target pack registers under the python target id", () => {
   assert.equal(pack.displayName, "Python");
 });
 
-test("python target pack owns stdlib modules and declares no surfaces", () => {
+test("python target pack owns stdlib modules and declares the js surface", () => {
   const pack = createPythonTargetPack();
 
-  assert.deepEqual(pack.surfaces, []);
+  assert.deepEqual(pack.surfaces.map((surface) => surface.id), ["js"]);
+  assert.deepEqual(
+    pack.surfaces[0].runtimeContributions({}).references,
+    [{ kind: "python-package", include: "tsonic-python-js" }],
+  );
   assert.equal("packages" in pack, false);
   const prefixes = pack.provider.moduleOwnership.map((entry) => entry.specifierPrefix);
   for (const specifier of ["@python/math", "@python/pathlib", "@python/os", "@python/sys", "@python/datetime", "@python/asyncio"]) {

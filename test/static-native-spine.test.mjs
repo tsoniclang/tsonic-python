@@ -25,6 +25,55 @@ export function add(a: int32, b: int32): int32 {
   ].join("\n"));
 });
 
+test("public class, enum, and record names are preserved verbatim", () => {
+  const { result } = compilePython({
+    files: {
+      "index.ts": `
+import type { int32 } from "@tsonic/core/types.js";
+
+export enum HttpStatusKind {
+  OkResult = 200,
+  NotFoundResult = 404,
+}
+
+export interface RequestSummary {
+  statusCode: int32;
+  bodyText: string;
+}
+
+export class RetryPolicyManager {
+  maxAttempts: int32;
+
+  constructor(maxAttempts: int32) {
+    this.maxAttempts = maxAttempts;
+  }
+
+  attemptsFor(statusKind: HttpStatusKind): int32 {
+    if (statusKind === HttpStatusKind.OkResult) {
+      return 0;
+    }
+    return this.maxAttempts;
+  }
+}
+
+export function summarize(statusCode: int32, bodyText: string): RequestSummary {
+  return { statusCode, bodyText };
+}
+`,
+    },
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  const text = artifactText(result, "src/tsonic_generated/index.py");
+  assert.match(text, /class HttpStatusKind\(IntEnum\):/u);
+  assert.match(text, /OkResult = 200/u);
+  assert.match(text, /class RequestSummary:/u);
+  assert.match(text, /class RetryPolicyManager:/u);
+  assert.match(text, /def attemptsFor\(self, statusKind: "HttpStatusKind"\)/u);
+  assert.match(text, /def summarize\(statusCode: int, bodyText: str\)/u);
+  assert.doesNotMatch(text, /http_status_kind|request_summary|retry_policy_manager|attempts_for|status_code|body_text|max_attempts/u);
+});
+
 test("source names are preserved verbatim, never PEP8-renamed", () => {
   const { result } = compilePython({
     files: {

@@ -27,7 +27,10 @@ test("stdlib target capabilities create with unique ids and no dependencies", ()
   assert.equal(new Set(ids).size, ids.length);
   for (const providerPackage of packages) {
     assert.deepEqual(providerPackage.runtimeContributions({}).references, []);
-    assert.ok(providerPackage.pythonCapabilityOperations().length > 0);
+    const mappers = providerPackage.createOperationMappers({});
+    assert.equal(mappers.length, 1);
+    assert.equal(mappers[0].kind, "python-operation-rows");
+    assert.ok(mappers[0].rows.length > 0);
   }
 });
 
