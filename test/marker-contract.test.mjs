@@ -38,7 +38,7 @@ test("Python converts typed-location facts into one target-owned rejection", () 
   assert.match(semantics, /PYTHON_TYPED_LOCATION_UNSUPPORTED/u);
   assert.doesNotMatch(
     disposition,
-    /\baddressOf\b|\ballocatePointer\b|\bloadPointer\b|\bstorePointer\b/u,
+    /\baddressOf\b|\ballocatePointer\b|\bequalPointer\b|\bloadPointer\b|\bstorePointer\b/u,
   );
 });
 

@@ -154,6 +154,7 @@ import {
 } from "../../options/python-target-options.js";
 import {
   selectPythonTypedLocationDisposition,
+  type PythonUnsupportedTypedLocationOperation,
 } from "./typed-location-disposition.js";
 
 export const pythonTargetSemanticsExtensionId = "tsonic.python.target-semantics";
@@ -3002,7 +3003,7 @@ function appendProviderOperationDiagnostic(
 function appendUnsupportedTypedLocationDiagnostic(
   walk: PythonFactWalk,
   expression: Node,
-  operation: "address-of" | "allocate" | "load" | "store",
+  operation: PythonUnsupportedTypedLocationOperation["operation"],
 ): void {
   if (walk.reportedTypedLocations.has(expression)) {
     return;
