@@ -17,6 +17,11 @@ the C# and Rust package layout:
 This repository must not own JS/Node runtime surface implementations, GPU
 kernel IR (`tsonic-gpu`), or Triton lowering (`gpu-triton`).
 
+Python exposes no target-flavoured reference, borrow, or pointer aliases.
+Neutral typed-location facts are converted at one Python-owned semantic
+boundary into a deterministic unsupported disposition; the backend never
+reads neutral marker facts or infers operations from marker spellings.
+
 ## Supported lanes
 
 Target infrastructure: target pack registration, target option validation
