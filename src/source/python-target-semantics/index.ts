@@ -152,6 +152,9 @@ import {
   readPythonTypescriptCompatibilityMode,
   validatePythonTargetOptions,
 } from "../../options/python-target-options.js";
+import {
+  selectPythonTypedLocationDisposition,
+} from "./typed-location-disposition.js";
 
 export const pythonTargetSemanticsExtensionId = "tsonic.python.target-semantics";
 
@@ -202,6 +205,7 @@ interface PythonFactWalk {
   // closed at every use site.
   readonly provenSourceTypes: Map<string, Node>;
   readonly jsEnabled: boolean;
+  readonly reportedTypedLocations: WeakSet<Node>;
   currentThisCarrier?: TargetTypeRef;
 }
 
@@ -240,7 +244,14 @@ export function recordPythonFactsBeforeFinalization(
   providerRows: readonly PythonCapabilityOperationRow[],
   jsEnabled = false,
 ): void {
-  const walk: PythonFactWalk = { lifecycle, providerRows, resolving: new Set(), provenSourceTypes: new Map(), jsEnabled };
+  const walk: PythonFactWalk = {
+    lifecycle,
+    providerRows,
+    resolving: new Set(),
+    provenSourceTypes: new Map(),
+    jsEnabled,
+    reportedTypedLocations: new WeakSet<Node>(),
+  };
   const { ast } = lifecycle.compiler;
   const projectStatements = (kindName: string): readonly { statement: Node; sourceFile: SourceFile }[] => {
     const results: { statement: Node; sourceFile: SourceFile }[] = [];
@@ -1106,6 +1117,18 @@ function resolveCallLikeCarrier(
   expressionKind: string,
 ): TargetTypeRef | undefined {
   const { ast, checker } = walk.lifecycle.compiler;
+  const typedLocation = selectPythonTypedLocationDisposition(
+    walk.lifecycle.host.facts,
+    expression,
+  );
+  if (typedLocation !== undefined) {
+    appendUnsupportedTypedLocationDiagnostic(
+      walk,
+      expression,
+      typedLocation.operation,
+    );
+    return undefined;
+  }
   const callee = Node_Expression(expression);
   if (callee === undefined) {
     return undefined;
@@ -2973,6 +2996,34 @@ function appendProviderOperationDiagnostic(
       { message: `target.capability=python.capability.${operationKind}` },
       { message: `provider.module=${identity.moduleSpecifier}` },
     ],
+  });
+}
+
+function appendUnsupportedTypedLocationDiagnostic(
+  walk: PythonFactWalk,
+  expression: Node,
+  operation: "address-of" | "allocate" | "load" | "store",
+): void {
+  if (walk.reportedTypedLocations.has(expression)) {
+    return;
+  }
+  walk.reportedTypedLocations.add(expression);
+  const { ast } = walk.lifecycle.compiler;
+  const sourceFile = ast.getSourceFile(expression);
+  walk.lifecycle.host.diagnostics.append({
+    extensionId: pythonTargetSemanticsExtensionId,
+    extensionCode: "PYTHON_TYPED_LOCATION_UNSUPPORTED",
+    numericCode: 0,
+    category: "error",
+    message:
+      `Python does not implement finalized typed-location operation '${operation}'.`,
+    nodeOrSpan: expression,
+    evidence: [{
+      message:
+        "The Python target rejected a canonical TSTS typed-location operation without inspecting its public spelling.",
+    }],
+    identity:
+      `python-typed-location:${ast.getFileName(sourceFile)}:${ast.pos(expression)}:${ast.end(expression)}:${operation}`,
   });
 }
 
