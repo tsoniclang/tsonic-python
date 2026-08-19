@@ -3,7 +3,6 @@ import type {
   TargetBackendContext,
   TargetPack,
   TargetProviderContext,
-  TargetRuntimeContributionContext,
   TargetRuntimeContributions,
   TargetToolchain,
   TargetToolchainContext,
@@ -12,15 +11,12 @@ import type { CompilerExtension } from "@tsonic/tsts";
 import { createPythonBackend } from "../backend/python-backend.js";
 import { createPythonTargetSemanticsExtension } from "../source/python-target-semantics/index.js";
 import { createPythonStdlibCapabilities } from "../source/capabilities/stdlib.js";
-import { readPythonTypescriptCompatibilityMode, validatePythonTargetOptions } from "../options/python-target-options.js";
+import { validatePythonTargetOptions } from "../options/python-target-options.js";
 import { pythonPackageReferenceKind } from "../backend/planner/pyproject.js";
 import { createPythonToolchain } from "../toolchain/python-toolchain.js";
 
 export const pythonTargetId = "python";
 
-// The JS compatibility runtime ships as an ordinary Python dependency; it is
-// referenced only when JS compatibility is selected through the compat mode
-// or the js surface. Strict-native output never references it.
 const pythonJsRuntimeReference = {
   kind: pythonPackageReferenceKind,
   include: "tsonic-python-js",
@@ -58,11 +54,6 @@ export function createPythonTargetPack(): TargetPack {
       // configuration selection. Third-party libraries arrive as installed
       // target-capability plugins selected by the host.
       moduleOwnership: createPythonStdlibCapabilities().flatMap((capability) => capability.moduleOwnership),
-      runtimeContributions(context: TargetRuntimeContributionContext): TargetRuntimeContributions {
-        return readPythonTypescriptCompatibilityMode(context.target) === "compat"
-          ? { references: [pythonJsRuntimeReference] }
-          : { references: [] };
-      },
       createExtensions(context: TargetProviderContext): readonly CompilerExtension[] {
         validatePythonTargetOptions(context.target);
         rejectDuplicateModuleOwnership(context.selectedCapabilities);

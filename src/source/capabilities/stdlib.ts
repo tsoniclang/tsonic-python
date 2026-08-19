@@ -489,9 +489,9 @@ export function createPythonJsonCapability(): PythonTargetCapability {
         name: "dumps",
         kind: "function",
         // Overload order matters: exact primitive shapes first, then the
-        // array shape (which also admits tuples), then the wide fallback
-        // that admits dict, Optional, and tuple-of-mixed values whose
-        // carriers the argument contract proves.
+        // array shape (which also admits tuples), then the general
+        // contract-checked shape for dict, Optional, and tuple-of-mixed
+        // values whose carriers the argument contract proves.
         signatures: [
           dumpsSignature("string", { kind: "string" }),
           dumpsSignature("number", { kind: "number" }),

@@ -668,7 +668,7 @@ export function encodePair(): string {
   assert.match(run.stdout, /JSON-ROUNDTRIP-OK/u);
 });
 
-test("JS compat lanes execute against the real tsonic_python_js runtime", () => {
+test("JS surface lanes execute against the real tsonic_python_js runtime", () => {
   const { result } = compilePython({
     files: {
       "index.ts": `
@@ -729,7 +729,7 @@ export function typedProbe(): number {
 }
 `,
     },
-    target: { id: "python", options: { typescriptCompatibility: "compat" } },
+    surfaces: ["js"],
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -737,19 +737,19 @@ export function typedProbe(): number {
   assert.match(moduleText, /tsonic_python_js/u);
   assert.match(result.artifacts.find((artifact) => artifact.path === "pyproject.toml").text, /"tsonic-python-js",/u);
 
-  const projectRoot = materialize("exec_js_compat", result.artifacts);
-  const compatEnv = {
+  const projectRoot = materialize("exec_js_surface", result.artifacts);
+  const jsSurfaceEnv = {
     ...process.env,
     PYTHONPATH: [join(projectRoot, "src"), pythonJsRuntimeRoot].join(":"),
   };
-  const compileRun = runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot, env: compatEnv });
+  const compileRun = runPython(["-m", "compileall", "-q", "src"], { cwd: projectRoot, env: jsSurfaceEnv });
   assert.equal(compileRun.status ?? 0, 0);
   runPython(["-c", `
 import ast, pathlib
 for path in pathlib.Path("src").rglob("*.py"):
     ast.parse(path.read_text())
 print("PARSE-OK")
-`], { cwd: projectRoot });
+`], { cwd: projectRoot, env: jsSurfaceEnv });
 
   const runnerFile = join(projectRoot, "runner.py");
   writeFileSync(runnerFile, [
@@ -777,15 +777,15 @@ print("PARSE-OK")
     "assert collectionsProbe() == 3",
     "assert dateProbe() == 1972, dateProbe()",
     "assert typedProbe() == 49",
-    'print("JS-COMPAT-OK")',
+    'print("JS-SURFACE-OK")',
     "",
   ].join("\n"));
-  const run = runPython([runnerFile], { cwd: projectRoot, env: compatEnv });
-  assert.match(run.stdout, /JS-COMPAT-OK/u);
+  const run = runPython([runnerFile], { cwd: projectRoot, env: jsSurfaceEnv });
+  assert.match(run.stdout, /JS-SURFACE-OK/u);
 });
 
-test("JS parity closure lanes execute as one generated compat script", () => {
-  const target = { id: "python", options: { typescriptCompatibility: "compat", outputType: "script", packageName: "parity_proof" } };
+test("JS parity closure lanes execute as one generated script", () => {
+  const target = { id: "python", options: { outputType: "script", packageName: "parity_proof" } };
   const { result } = compilePython({
     files: {
       "index.ts": `
@@ -842,6 +842,7 @@ export function main(): void {
 `,
     },
     target,
+    surfaces: ["js"],
   });
 
   assert.deepEqual(result.diagnostics, []);

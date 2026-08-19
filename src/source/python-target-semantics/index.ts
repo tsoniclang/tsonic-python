@@ -96,7 +96,7 @@ import {
   isPythonExceptionCarrier,
   isPythonIntegerCarrier,
   isPythonJsArrayCarrier,
-  isPythonJsCompatCarrier,
+  isPythonJsSurfaceCarrier,
   isPythonJsObjectCarrier,
   isPythonJsValueCarrier,
   isPythonJsonSerializableCarrier,
@@ -148,10 +148,7 @@ import {
   selectJsSurfaceOperation,
 } from "./js-surface-operations.js";
 import type { JsOperationSelection } from "./js-surface-operations.js";
-import {
-  readPythonTypescriptCompatibilityMode,
-  validatePythonTargetOptions,
-} from "../../options/python-target-options.js";
+import { validatePythonTargetOptions } from "../../options/python-target-options.js";
 import {
   selectPythonTypedLocationDisposition,
   type PythonUnsupportedTypedLocationOperation,
@@ -171,10 +168,7 @@ export function createPythonTargetSemanticsExtension(context: TargetProviderCont
       selectedSurfaces: context.selectedSurfaces,
     },
   );
-  // JS-surface lanes open only with the js surface or compat mode; strict
-  // native output stays entirely free of the compat runtime.
-  const jsEnabled = context.selectedSurfaces.some((surface) => surface.id === "js") ||
-    readPythonTypescriptCompatibilityMode(context.target) === "compat";
+  const jsEnabled = context.selectedSurfaces.some((surface) => surface.id === "js");
   return {
     identity: {
       id: pythonTargetSemanticsExtensionId,
@@ -623,7 +617,7 @@ function recordExpressionStatementFacts(walk: PythonFactWalk, expression: Node, 
 
 // Field writes participate on `this` receivers inside proven class bodies
 // (native lane) and on dynamic JS carriers with identifier member names
-// (compat lane); other property writes (including `.length =`) have no lane.
+// (JS surface lane); other property writes (including `.length =`) have no lane.
 function recordPropertyWriteFacts(
   walk: PythonFactWalk,
   assignment: Node,
@@ -1053,8 +1047,8 @@ function resolveBinaryCarrier(
   const selection = selectPythonBinaryOperator(operatorKind, leftCarrier, rightCarrier);
   if (selection === undefined || leftCarrier === undefined) {
     if (walk.jsEnabled && equalityOperator && leftCarrier !== undefined && rightCarrier !== undefined &&
-        (isPythonJsCompatCarrier(leftCarrier) || isPythonJsCompatCarrier(rightCarrier))) {
-      // JS strict equality between compat-carrying operands lowers through
+        (isPythonJsSurfaceCarrier(leftCarrier) || isPythonJsSurfaceCarrier(rightCarrier))) {
+      // JS strict equality between JS-surface operands lowers through
       // the runtime algorithm; the call receives both planned operands.
       const operationId = "tsonic.python.js.strict-equal";
       recordTargetOperation(walk, expression, operationId, "method", "strict_equal");
@@ -1463,8 +1457,8 @@ function resolveElementAccessCarrier(
     });
     return setCarrierFact(walk, expression, dictValue);
   }
-  if (walk.jsEnabled && isPythonJsCompatCarrier(receiverCarrier)) {
-    // Keyed reads on compat carriers: positional slots on arrays and typed
+  if (walk.jsEnabled && isPythonJsSurfaceCarrier(receiverCarrier)) {
+    // Keyed reads on JS-surface carriers: positional slots on arrays and typed
     // arrays, property keys on dynamic values.
     const selection = selectJsSurfaceOperation({
       ownerName: "Array",
@@ -2737,7 +2731,7 @@ function resolveJsDeleteCarrier(walk: PythonFactWalk, expression: Node, sourceFi
   return setCarrierFact(walk, expression, boolCarrier);
 }
 
-// The undefined singleton lowers as a module attribute of the compat
+// The undefined singleton lowers as a module attribute of the JS
 // runtime; holes in sparse literals share the same fact shape.
 function recordJsUndefinedFacts(walk: PythonFactWalk, subject: Node): TargetTypeRef {
   const operationId = "tsonic.python.js.undefined";

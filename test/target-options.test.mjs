@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   readPythonOutputType,
   readPythonPackageName,
-  readPythonTypescriptCompatibilityMode,
   readPythonVersion,
   validatePythonTargetOptions,
 } from "../dist/index.js";
@@ -16,7 +15,6 @@ test("python target options default deterministically", () => {
   assert.equal(readPythonPackageName(target()), "tsonic_generated");
   assert.equal(readPythonVersion(target()), "3.12");
   assert.equal(readPythonOutputType(target()), "package");
-  assert.equal(readPythonTypescriptCompatibilityMode(target()), "strict-native");
 });
 
 test("python target options accept explicit supported values", () => {
@@ -24,22 +22,12 @@ test("python target options accept explicit supported values", () => {
     packageName: "my_app",
     pythonVersion: "3.13",
     outputType: "script",
-    typescriptCompatibility: "strict-native",
   });
 
   validatePythonTargetOptions(selection);
   assert.equal(readPythonPackageName(selection), "my_app");
   assert.equal(readPythonVersion(selection), "3.13");
   assert.equal(readPythonOutputType(selection), "script");
-  assert.equal(readPythonTypescriptCompatibilityMode(selection), "strict-native");
-});
-
-test("compat mode selects the wired python-js runtime lane", () => {
-  assert.equal(
-    readPythonTypescriptCompatibilityMode(target({ typescriptCompatibility: "compat" })),
-    "compat",
-  );
-  validatePythonTargetOptions(target({ typescriptCompatibility: "compat" }));
 });
 
 test("python target options reject unknown keys", () => {
@@ -57,8 +45,8 @@ test("python target options reject invalid values", () => {
   assert.throws(() => readPythonVersion(target({ pythonVersion: "3.11" })), /'3\.12', '3\.13', or '3\.14'/);
   assert.throws(() => readPythonOutputType(target({ outputType: "Exe" })), /'package' or 'script'/);
   assert.throws(
-    () => readPythonTypescriptCompatibilityMode(target({ typescriptCompatibility: "loose" })),
-    /'strict-native' or 'compat'/,
+    () => validatePythonTargetOptions(target({ typescriptCompatibility: "compat" })),
+    /option 'options\.typescriptCompatibility' is not supported/,
   );
   assert.throws(() => validatePythonTargetOptions(target({ packageName: "My-App" })), /packageName/);
 });

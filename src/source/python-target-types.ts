@@ -235,7 +235,7 @@ export function pythonJsDataViewTargetType(): TargetTypeRef {
   return { kind: "target-named", id: pythonJsDataViewTargetId };
 }
 
-const pythonJsCompatTargetIds: ReadonlySet<string> = new Set([
+const pythonJsSurfaceTargetIds: ReadonlySet<string> = new Set([
   pythonJsValueTargetId,
   pythonJsArrayTargetId,
   pythonJsMapTargetId,
@@ -247,8 +247,8 @@ const pythonJsCompatTargetIds: ReadonlySet<string> = new Set([
   pythonJsDataViewTargetId,
 ]);
 
-export function isPythonJsCompatCarrier(carrier: TargetTypeRef | undefined): boolean {
-  return carrier?.kind === "target-named" && pythonJsCompatTargetIds.has(carrier.id);
+export function isPythonJsSurfaceCarrier(carrier: TargetTypeRef | undefined): boolean {
+  return carrier?.kind === "target-named" && pythonJsSurfaceTargetIds.has(carrier.id);
 }
 
 export function pythonJsRegExpTargetType(): TargetTypeRef {
