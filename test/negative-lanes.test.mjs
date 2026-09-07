@@ -94,7 +94,7 @@ export function outer(): string {
   assertFailsClosed(result);
 });
 
-test("sparse array literals fail closed in strict-native mode", () => {
+test("sparse array literals fail closed without the JS surface", () => {
   const { result } = compilePython({
     files: {
       "index.ts": `

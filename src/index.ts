@@ -3,7 +3,6 @@ export { createTsonicPlugin } from "./plugin.js";
 export {
   readPythonOutputType,
   readPythonPackageName,
-  readPythonTypescriptCompatibilityMode,
   readPythonVersion,
   validatePythonTargetOptions,
 } from "./options/python-target-options.js";

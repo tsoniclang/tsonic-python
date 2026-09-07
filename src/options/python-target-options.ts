@@ -1,7 +1,4 @@
-import type {
-  TargetSelection,
-  TargetTypescriptCompatibilityMode,
-} from "@tsonic/target-api";
+import type { TargetSelection } from "@tsonic/target-api";
 import { pythonReservedIdentifiers } from "../common/python-names.js";
 
 export type PythonOutputType = "package" | "script";
@@ -12,7 +9,6 @@ const supportedPythonTargetOptionKeys = Object.freeze([
   "outputType",
   "packageName",
   "pythonVersion",
-  "typescriptCompatibility",
 ]);
 
 const packageNamePattern = /^[a-z][a-z0-9_]*$/u;
@@ -31,7 +27,6 @@ export function validatePythonTargetOptions(target: TargetSelection): void {
   readPythonPackageName(target);
   readPythonVersion(target);
   readPythonOutputType(target);
-  readPythonTypescriptCompatibilityMode(target);
 }
 
 export function readPythonPackageName(target: TargetSelection): string {
@@ -66,17 +61,6 @@ export function readPythonOutputType(target: TargetSelection): PythonOutputType 
   }
   if (value !== "package" && value !== "script") {
     throw new Error("Python target option 'outputType' must be either 'package' or 'script'.");
-  }
-  return value;
-}
-
-export function readPythonTypescriptCompatibilityMode(target: TargetSelection): TargetTypescriptCompatibilityMode {
-  const value = target.options?.typescriptCompatibility;
-  if (value === undefined) {
-    return "strict-native";
-  }
-  if (value !== "strict-native" && value !== "compat") {
-    throw new Error("Python target option 'typescriptCompatibility' must be either 'strict-native' or 'compat'.");
   }
   return value;
 }

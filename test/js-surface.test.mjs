@@ -2,24 +2,24 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { artifactText, compilePython } from "./helpers/python-session.mjs";
 
-const compatTarget = { id: "python", options: { typescriptCompatibility: "compat" } };
+const jsSurface = ["js"];
 
-test("compat pyproject carries the tsonic-python-js dependency; strict-native does not", () => {
+test("the JS surface contributes tsonic-python-js while the native profile does not", () => {
   const source = {
     "index.ts": `
 export function idle(): void {}
 `,
   };
-  const compat = compilePython({ files: source, target: compatTarget });
-  assert.deepEqual(compat.result.diagnostics, []);
-  assert.match(artifactText(compat.result, "pyproject.toml"), /"tsonic-python-js",/u);
+  const withJsSurface = compilePython({ files: source, surfaces: jsSurface });
+  assert.deepEqual(withJsSurface.result.diagnostics, []);
+  assert.match(artifactText(withJsSurface.result, "pyproject.toml"), /"tsonic-python-js",/u);
 
-  const strict = compilePython({ files: source });
-  assert.deepEqual(strict.result.diagnostics, []);
-  assert.doesNotMatch(artifactText(strict.result, "pyproject.toml"), /tsonic-python-js/u);
+  const nativeProfile = compilePython({ files: source });
+  assert.deepEqual(nativeProfile.result.diagnostics, []);
+  assert.doesNotMatch(artifactText(nativeProfile.result, "pyproject.toml"), /tsonic-python-js/u);
 });
 
-test("undefined and strict equality lower through the runtime under compat", () => {
+test("undefined and strict equality lower through the selected JS runtime", () => {
   const { result } = compilePython({
     files: {
       "index.ts": `
@@ -30,7 +30,7 @@ export function firstOrUndefined(index: number): boolean {
 }
 `,
     },
-    target: compatTarget,
+    surfaces: jsSurface,
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -50,7 +50,7 @@ export function sparse(): number {
 }
 `,
     },
-    target: compatTarget,
+    surfaces: jsSurface,
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -73,7 +73,7 @@ export function probe(text: string, value: number): number {
 }
 `,
     },
-    target: compatTarget,
+    surfaces: jsSurface,
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -83,7 +83,7 @@ export function probe(text: string, value: number): number {
   assert.match(text, /number_is_finite|is_finite/u);
 });
 
-test("Map, Set, Date, JSON, and typed arrays lower under compat", () => {
+test("Map, Set, Date, JSON, and typed arrays lower under the JS surface", () => {
   const { result } = compilePython({
     files: {
       "index.ts": `
@@ -100,7 +100,7 @@ export function collections(): number {
 }
 `,
     },
-    target: compatTarget,
+    surfaces: jsSurface,
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -112,7 +112,7 @@ export function collections(): number {
   assert.match(text, /DataView\(buffer\)/u);
 });
 
-test("strict-native output stays free of the compat runtime and fails closed on JS lanes", () => {
+test("the native profile stays free of the JS runtime and fails closed on JS lanes", () => {
   const { result } = compilePython({
     files: {
       "index.ts": `
@@ -128,7 +128,7 @@ export function sparse(): number {
   assert.ok(result.diagnostics.length > 0);
 });
 
-test("hard-rejected JS lanes fail closed under compat with zero artifacts", () => {
+test("hard-rejected JS lanes fail closed under the JS surface with zero artifacts", () => {
   const cases = [
     ["symbols", `
 export function tag(): void {
@@ -152,13 +152,13 @@ export function later(): void {
 `],
   ];
   for (const [label, source] of cases) {
-    const { result } = compilePython({ files: { "index.ts": source }, target: compatTarget });
+    const { result } = compilePython({ files: { "index.ts": source }, surfaces: jsSurface });
     assert.equal(result.artifacts.length, 0, `${label} must produce zero artifacts`);
     assert.ok(result.diagnostics.length > 0, `${label} must diagnose`);
   }
 });
 
-test("regexp literals lower to the runtime subset engine under compat", () => {
+test("regexp literals lower to the selected JS runtime subset engine", () => {
   const { result } = compilePython({
     files: {
       "index.ts": `
@@ -171,7 +171,7 @@ export function tidy(text: string): string {
 }
 `,
     },
-    target: compatTarget,
+    surfaces: jsSurface,
   });
 
   assert.deepEqual(result.diagnostics, []);
@@ -191,7 +191,7 @@ export function build(pattern: string): boolean {
 }
 `,
     },
-    target: compatTarget,
+    surfaces: jsSurface,
   });
 
   assert.equal(result.artifacts.length, 0);

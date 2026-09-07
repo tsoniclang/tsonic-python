@@ -11,8 +11,8 @@ produce deterministic diagnostics, never guessed Python source.
 Runtime packages are intentionally split into sibling repositories, matching
 the C# and Rust package layout:
 
-- `python-js` — JS compatibility runtime for Python (selected only in compat
-  mode or through a selected JS surface capability)
+- `python-js` — JS runtime for Python, selected only through the explicit
+  `js` surface
 
 This repository must not own JS/Node runtime surface implementations, GPU
 kernel IR (`tsonic-gpu`), or Triton lowering (`gpu-triton`).
@@ -133,9 +133,7 @@ artifacts. That includes sparse arrays, JS array semantics on non-primitive
 elements (`at`, `includes`/`indexOf` over object elements, `.length =`),
 template literals with unproven substitutions, class
 inheritance/generics/accessors, string enums, enum ordering comparisons,
-and, in strict-native mode, every JS
-compatibility lane (compat output is selected explicitly through
-`typescriptCompatibility: "compat"` or the `js` surface).
+and every JS operation when the `js` surface is not selected.
 
 ## Lane ledger
 
@@ -156,8 +154,7 @@ Complete (fact-backed, runtime-proven):
 - Packaging: wheel-ready layout, py.typed, deterministic ordering,
   interpreter gates (3.12/3.13/3.14; absent interpreters are explicit
   environment skips)
-- JS compatibility subset through the tsonic-python-js runtime, selected by
-  compat mode or the js surface: undefined and strict equality, sparse
+- JS surface subset through the tsonic-python-js runtime: undefined and strict equality, sparse
   arrays with JsArray methods and index writes, UTF-16 string helpers with
   at/codePointAt/concat/string replace/case conversion, Number/Math
   helpers, JSON parse/stringify over JsValue carriers, dynamic
@@ -166,7 +163,7 @@ Complete (fact-backed, runtime-proven):
   RegExp subset (literal and literal-argument construction; test, replace,
   split, search; selection by first-argument carrier). The runtime parity
   inventory lives in the python-js repository (docs/js-parity.md);
-  strict-native output never references the runtime
+  native-profile output never references the runtime
 
 Hard-reject (fail closed by design, no external dependency):
 
@@ -180,7 +177,7 @@ Hard-reject (fail closed by design, no external dependency):
 - continue inside desugared C-style for; unawaited async calls; tuple
   access with non-literal indexes; source names in the generated-helper
   namespace
-- JS compat members without closed runtime rows: WeakMap/WeakSet, timers,
+- JS surface members without closed runtime rows: WeakMap/WeakSet, timers,
   console, fetch, DOM/Web and Node APIs, proxies, symbols, custom toJSON
   and replacer/reviver, RegExp.exec and dynamic RegExp construction
   (out-of-subset patterns raise at runtime construction — the runtime
@@ -212,8 +209,7 @@ The build requires the sibling `tsonic` repository checked out at
   "options": {
     "packageName": "tsonic_generated",      // ^[a-z][a-z0-9_]*$
     "pythonVersion": "3.12",                 // "3.12" | "3.13" | "3.14"
-    "outputType": "package",                 // "package" | "script"
-    "typescriptCompatibility": "strict-native" // "strict-native" | "compat"
+    "outputType": "package"                  // "package" | "script"
   }
 }
 ```
